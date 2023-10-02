@@ -50,20 +50,23 @@ function(split_string_into_list _input_string _output_list)
     set(${_output_list} ${_split_list} PARENT_SCOPE)
 endfunction()
 
+# Extract the compiler name without the path
+get_filename_component(COMPILER_NAME "${CMAKE_C_COMPILER}" NAME)
+
 # Import warning_flags.txt
-file(STRINGS ../warning_flags.txt WARNING_FLAGS_STRING)
+file(STRINGS "../${COMPILER_NAME}_warning_flags.txt" WARNING_FLAGS_STRING)
 split_string_into_list("${WARNING_FLAGS_STRING}" WARNING_FLAGS_LIST)
 
 # Import analyzer_flags.txt
-file(STRINGS ../analyzer_flags.txt ANALYZER_FLAGS_STRING)
+file(STRINGS "../${COMPILER_NAME}_analyzer_flags.txt" ANALYZER_FLAGS_STRING)
 split_string_into_list("${WARNING_FLAGS_STRING}" ANALYZER_FLAGS_LIST)
 
 # Import debug_flags.txt
-file(STRINGS ../debug_flags.txt DEBUG_FLAGSSTRING)
+file(STRINGS "../${COMPILER_NAME}_debug_flags.txt" DEBUG_FLAGSSTRING)
 split_string_into_list("${DEBUG_FLAGS_STRING}" DEBUG_FLAGS_LIST)
 
 # Import sanitizer_flags.txt
-file(STRINGS ../sanitizer_flags.txt SANITIZER_FLAGS_STRING)
+file(STRINGS "../${COMPILER_NAME}_sanitizer_flags.txt" SANITIZER_FLAGS_STRING)
 split_string_into_list("${SANITIZER_FLAGS_STRING}" SANITIZER_FLAGS_LIST)
 
 # Set compiler flags for the target
