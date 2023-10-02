@@ -23,6 +23,14 @@ set(HEADER_LIST
 # Build the shared library
 add_library(p101_env SHARED ${SOURCES})
 
+target_include_directories(p101_env PRIVATE /usr/local/include)
+target_link_directories(p101_env PRIVATE /usr/local/lib)
+target_link_directories(p101_env PRIVATE /usr/local/lib64)
+
+# Enable UBSan checks
+target_compile_options(p101_env PRIVATE -fsanitize=undefined)
+target_link_libraries(p101_env PRIVATE -fsanitize=undefined)
+
 # Include directories (if needed)
 target_include_directories(p101_env PUBLIC ${CMAKE_SOURCE_DIR}/include)
 
@@ -627,7 +635,7 @@ set(WARNING_FLAGS
     -Wpointer-to-enum-cast
     -Wpointer-to-int-cast
     -Wpointer-type-mismatch
-    -Wpoison-system-directories
+#    -Wpoison-system-directories
     -Wpotentially-direct-selector
     -Wpotentially-evaluated-expression
     -Wpragma-clang-attribute
@@ -987,7 +995,7 @@ add_custom_target(format
 # Lint source files using clang-tidy
 add_custom_target(lint
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        COMMAND ${CLANG_TIDY} ${SOURCES} -quiet --warnings-as-errors='*' -checks=*,-llvmlibc-restrict-system-libc-headers,-altera-struct-pack-align,-readability-identifier-length,-altera-unroll-loops,-cppcoreguidelines-init-variables,-cert-err33-c,-modernize-macro-to-enum,-bugprone-easily-swappable-parameters,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-altera-id-dependent-backward-branch,-concurrency-mt-unsafe,-misc-unused-parameters,-hicpp-signed-bitwise,-google-readability-todo,-cert-msc30-c,-cert-msc50-cpp,-readability-function-cognitive-complexity,-clang-analyzer-security.insecureAPI.strcpy,-cert-env33-c,-android-cloexec-accept,-clang-analyzer-security.insecureAPI.rand,-misc-include-cleaner -- ${CMAKE_C_FLAGS} ${COMMON_FLAGS} -I${CMAKE_SOURCE_DIR}/include
+        COMMAND ${CLANG_TIDY} ${SOURCES} -quiet --warnings-as-errors='*' -checks=*,-llvmlibc-restrict-system-libc-headers,-altera-struct-pack-align,-readability-identifier-length,-altera-unroll-loops,-cppcoreguidelines-init-variables,-cert-err33-c,-modernize-macro-to-enum,-bugprone-easily-swappable-parameters,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-altera-id-dependent-backward-branch,-concurrency-mt-unsafe,-misc-unused-parameters,-hicpp-signed-bitwise,-google-readability-todo,-cert-msc30-c,-cert-msc50-cpp,-readability-function-cognitive-complexity,-clang-analyzer-security.insecureAPI.strcpy,-cert-env33-c,-android-cloexec-accept,-clang-analyzer-security.insecureAPI.rand,-misc-include-cleaner -- ${CMAKE_C_FLAGS} ${COMMON_FLAGS} -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include
         COMMENT "Running clang-tidy"
 )
 

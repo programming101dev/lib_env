@@ -14,28 +14,24 @@
  * limitations under the License.
  */
 
-
 #include "p101_env/env.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 
-
 static void p101_env_init(struct p101_env *env, bool zero_free, p101_env_tracer tracer);
-
 
 struct p101_env
 {
-    bool zero_free;
+    bool            zero_free;
     p101_env_tracer tracer;
 };
-
 
 struct p101_env *p101_env_create(struct p101_error *err, bool zero_free, p101_env_tracer tracer)
 {
     struct p101_env *env;
 
-    env = (struct p101_env *)malloc(sizeof(struct p101_env));  // NOLINT(clang-analyzer-unix.Malloc)
+    env = (struct p101_env *)malloc(sizeof(struct p101_env));    // NOLINT(clang-analyzer-unix.Malloc)
 
     if(env == NULL)
     {
@@ -53,7 +49,7 @@ struct p101_env *p101_env_dup(struct p101_error *err, const struct p101_env *env
 {
     struct p101_env *new_env;
 
-    new_env = (struct p101_env *)malloc(sizeof(struct p101_env));  // NOLINT(clang-analyzer-unix.Malloc)
+    new_env = (struct p101_env *)malloc(sizeof(struct p101_env));    // NOLINT(clang-analyzer-unix.Malloc)
 
     if(new_env == NULL)
     {
@@ -70,7 +66,7 @@ struct p101_env *p101_env_dup(struct p101_error *err, const struct p101_env *env
 static void p101_env_init(struct p101_env *env, bool zero_free, p101_env_tracer tracer)
 {
     env->zero_free = zero_free;
-    env->tracer = tracer;
+    env->tracer    = tracer;
 }
 
 bool p101_env_is_zero_free(const struct p101_env *env)
@@ -103,13 +99,12 @@ void p101_env_set_tracer(struct p101_env *env, p101_env_tracer tracer)
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
-void p101_env_default_tracer(const struct p101_env *env,
-                             const char *file_name,
-                             const char *function_name,
-                             size_t line_number)
+
+void p101_env_default_tracer(const struct p101_env *env, const char *file_name, const char *function_name, size_t line_number)
 {
-    fprintf(stdout, "TRACE (pid=%d): %s : %s : @ %zu\n", getpid(), file_name, function_name, line_number); // NOLINT(cert-err33-c)
+    fprintf(stdout, "TRACE (pid=%d): %s : %s : @ %zu\n", getpid(), file_name, function_name, line_number);    // NOLINT(cert-err33-c)
 }
+
 #pragma GCC diagnostic pop
 
 void p101_env_trace(const struct p101_env *env, const char *file_name, const char *function_name, size_t line_number)
