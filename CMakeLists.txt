@@ -81,7 +81,6 @@ target_compile_options(p101_env PRIVATE
 # Get compiler flags for the target
 get_target_property(COMPILE_OPTIONS p101_env COMPILE_OPTIONS)
 string(REPLACE ";" " " COMPILE_OPTIONS_STR "${COMPILE_OPTIONS}")
-message(STATUS "COMPILE_OPTIONS: ${COMPILE_OPTIONS_STR}")
 
 find_program(CLANG_FORMAT NAMES "clang-format" REQUIRED)
 find_program(CLANG_TIDY NAMES "clang-tidy" REQUIRED)
@@ -100,8 +99,16 @@ add_custom_target(lint
         COMMENT "Running clang-tidy"
 )
 
+# Add a custom target for clang --analyze
+add_custom_target(analysis
+        COMMAND ${CMAKE_C_COMPILER} --analyze -Xclang -analyzer-checker=core --analyze -Xclang -analyzer-checker=deadcode -Xclang -analyzer-checker=security -Xclang -analyzer-checker=unix -Xclang -analyzer-checker=unix ${SOURCES} ${CMAKE_C_FLAGS} ${COMMON_FLAGS} -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Running clang --analyze"
+)
+
 add_dependencies(p101_env format)
 add_dependencies(p101_env lint)
+add_dependencies(p101_env analysis)
 
 # Check if the system uses 64-bit libraries
 get_property(LIB64 GLOBAL PROPERTY FIND_LIBRARY_USE_LIB64_PATHS)
@@ -112,9 +119,6 @@ if ("${LIB64}" STREQUAL "TRUE")
 else()
     set(LIBSUFFIX "")
 endif()
-
-# Print the LIBSUFFIX variable for debugging
-message("LIBSUFFIX: ${LIBSUFFIX}")
 
 # Define the installation directory for libraries
 set(INSTALL_LIB_DIR lib${LIBSUFFIX} CACHE PATH "Installation directory for libraries")
