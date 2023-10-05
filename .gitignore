@@ -471,3 +471,5 @@ server
 .idea/codeStyles/
 
 build
+
+*.plist
