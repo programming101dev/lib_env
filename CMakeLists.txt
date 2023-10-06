@@ -54,19 +54,19 @@ endfunction()
 get_filename_component(COMPILER_NAME "${CMAKE_C_COMPILER}" NAME)
 
 # Import warning_flags.txt
-file(STRINGS "../${COMPILER_NAME}_warning_flags.txt" WARNING_FLAGS_STRING)
+file(STRINGS "${CMAKE_SOURCE_DIR}/../${COMPILER_NAME}_warning_flags.txt" WARNING_FLAGS_STRING)
 split_string_into_list("${WARNING_FLAGS_STRING}" WARNING_FLAGS_LIST)
 
 # Import analyzer_flags.txt
-file(STRINGS "../${COMPILER_NAME}_analyzer_flags.txt" ANALYZER_FLAGS_STRING)
+file(STRINGS "${CMAKE_SOURCE_DIR}/../${COMPILER_NAME}_analyzer_flags.txt" ANALYZER_FLAGS_STRING)
 split_string_into_list("${WARNING_FLAGS_STRING}" ANALYZER_FLAGS_LIST)
 
 # Import debug_flags.txt
-file(STRINGS "../${COMPILER_NAME}_debug_flags.txt" DEBUG_FLAGSSTRING)
+file(STRINGS "${CMAKE_SOURCE_DIR}/../${COMPILER_NAME}_debug_flags.txt" DEBUG_FLAGSSTRING)
 split_string_into_list("${DEBUG_FLAGS_STRING}" DEBUG_FLAGS_LIST)
 
 # Import sanitizer_flags.txt
-file(STRINGS "../${COMPILER_NAME}_sanitizer_flags.txt" SANITIZER_FLAGS_STRING)
+file(STRINGS "${CMAKE_SOURCE_DIR}/../${COMPILER_NAME}_sanitizer_flags.txt" SANITIZER_FLAGS_STRING)
 split_string_into_list("${SANITIZER_FLAGS_STRING}" SANITIZER_FLAGS_LIST)
 
 # Set compiler flags for the target
@@ -102,7 +102,7 @@ add_custom_target(lint
 
 # Add a custom target for clang --analyze
 add_custom_target(analysis
-        COMMAND ${CMAKE_C_COMPILER} -DP101_ANALYZE --analyze -Xclang -analyzer-checker=core --analyze -Xclang -analyzer-checker=deadcode -Xclang -analyzer-checker=security -Xclang -analyzer-checker=unix -Xclang -analyzer-checker=unix ${CMAKE_C_FLAGS} ${COMMON_FLAGS} -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include ${SOURCES}
+        COMMAND ${CMAKE_C_COMPILER} -DP101_ANALYZE --analyzer-output=none --analyze -Xclang -analyzer-checker=core --analyze -Xclang -analyzer-checker=deadcode -Xclang -analyzer-checker=security -Xclang -analyzer-checker=unix -Xclang -analyzer-checker=unix ${CMAKE_C_FLAGS} ${COMMON_FLAGS} -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include ${SOURCES}
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         COMMENT "Running clang --analyze"
 )
@@ -114,11 +114,20 @@ add_custom_target(cppcheck
         COMMENT "Running cppcheck"
 )
 
-# Add a custom target for strict analysis (format, build, analyze, tidy, cppcheck)
-add_custom_target(strict
-        DEPENDS p101_env analysis lint cppcheck
-        COMMENT "Running code analysis tools"
-)
+# Check if CMAKE_C_COMPILER starts with "clang"
+if (CMAKE_C_COMPILER MATCHES "^clang")
+    # Add dependencies including 'analysis' for Clang compiler
+    add_custom_target(strict
+            DEPENDS p101_env analysis lint cppcheck
+            COMMENT "Running code analysis tools"
+    )
+else()
+    # Add dependencies without 'analysis' for other compilers
+    add_custom_target(strict
+            DEPENDS p101_env lint cppcheck
+            COMMENT "Running code analysis tools"
+    )
+endif()
 
 add_dependencies(p101_env format)
 
