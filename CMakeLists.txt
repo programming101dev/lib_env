@@ -84,12 +84,13 @@ string(REPLACE ";" " " COMPILE_OPTIONS_STR "${COMPILE_OPTIONS}")
 
 find_program(CLANG_FORMAT NAMES "clang-format" REQUIRED)
 find_program(CLANG_TIDY NAMES "clang-tidy" REQUIRED)
+find_program(CPPCHECK NAMES "cppcheck" REQUIRED)
 
 # Format source files using clang-format
 add_custom_target(format
         COMMAND ${CLANG_FORMAT} --style=file -i ${SOURCES} ${HEADER_LIST} ${HEADER_LIST_ARPA} ${HEADER_LIST_NET} ${HEADER_LIST_SYS}
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        COMMENT "Running clang-format on source files"
+        COMMENT "Running clang-format"
 )
 
 # Lint source files using clang-tidy
@@ -101,14 +102,28 @@ add_custom_target(lint
 
 # Add a custom target for clang --analyze
 add_custom_target(analysis
-        COMMAND ${CMAKE_C_COMPILER} --analyze -Xclang -analyzer-checker=core --analyze -Xclang -analyzer-checker=deadcode -Xclang -analyzer-checker=security -Xclang -analyzer-checker=unix -Xclang -analyzer-checker=unix ${SOURCES} ${CMAKE_C_FLAGS} ${COMMON_FLAGS} -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include
+        COMMAND ${CMAKE_C_COMPILER} -DP101_ANALYZE --analyze -Xclang -analyzer-checker=core --analyze -Xclang -analyzer-checker=deadcode -Xclang -analyzer-checker=security -Xclang -analyzer-checker=unix -Xclang -analyzer-checker=unix ${CMAKE_C_FLAGS} ${COMMON_FLAGS} -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include ${SOURCES}
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         COMMENT "Running clang --analyze"
 )
 
+# Add a custom target for cppcheck
+add_custom_target(cppcheck
+        COMMAND ${CPPCHECK} --error-exitcode=1 --quiet --library=posix --enable=all --suppress=missingIncludeSystem --suppress=unusedFunction -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include ${SOURCES}
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Running cppcheck"
+)
+
+# Add a custom target for strict analysis (format, build, analyze, tidy, cppcheck)
+add_custom_target(strict
+        DEPENDS p101_env analysis lint cppcheck
+        COMMENT "Running code analysis tools"
+)
+
 add_dependencies(p101_env format)
-add_dependencies(p101_env lint)
-add_dependencies(p101_env analysis)
+
+# Set the default target to be 'strict'
+add_custom_target(default_target DEPENDS strict)
 
 # Check if the system uses 64-bit libraries
 get_property(LIB64 GLOBAL PROPERTY FIND_LIBRARY_USE_LIB64_PATHS)
