@@ -12,29 +12,59 @@ set(CMAKE_C_EXTENSIONS OFF)
 
 # Source files for the library
 set(SOURCES
-        ${CMAKE_SOURCE_DIR}/src/env.c
+    ${CMAKE_SOURCE_DIR}/src/env.c
 )
 
 # Define the list of header files to install
 set(HEADER_LIST
-        ${CMAKE_SOURCE_DIR}/include/p101_env/env.h
+    ${CMAKE_SOURCE_DIR}/include/p101_env/env.h
 )
 
 # Build the shared library
 add_library(p101_env SHARED ${SOURCES})
-
 target_include_directories(p101_env PRIVATE /usr/local/include)
-target_link_directories(p101_env PRIVATE /usr/local/lib)
-target_link_directories(p101_env PRIVATE /usr/local/lib64)
-
-# Enable sanitizer checks
-target_compile_options(p101_env PRIVATE -fsanitize=undefined -fsanitize=address)
-target_link_libraries(p101_env PRIVATE -fsanitize=undefined -fsanitize=address)
-
-# Include directories (if needed)
 target_include_directories(p101_env PUBLIC ${CMAKE_SOURCE_DIR}/include)
 
-# Link libraries (if needed)
+# Extract the compiler name without the path
+get_filename_component(COMPILER_NAME "${CMAKE_C_COMPILER}" NAME)
+
+function(split_string_into_list _input_string _output_list)
+    string(REGEX REPLACE "[ ]+" ";" _split_list "${_input_string}")
+    set(${_output_list} ${_split_list} PARENT_SCOPE)
+endfunction()
+
+# Import warning_flags.txt
+file(STRINGS "${CMAKE_SOURCE_DIR}/../flags/${COMPILER_NAME}/warning_flags.txt" WARNING_FLAGS_STRING)
+split_string_into_list("${WARNING_FLAGS_STRING}" WARNING_FLAGS_LIST)
+
+# Import analyzer_flags.txt
+file(STRINGS "${CMAKE_SOURCE_DIR}/../flags/${COMPILER_NAME}/analyzer_flags.txt" ANALYZER_FLAGS_STRING)
+split_string_into_list("${ANALYZER_FLAGS_STRING}" ANALYZER_FLAGS_LIST)
+
+# Import debug_flags.txt
+file(STRINGS "${CMAKE_SOURCE_DIR}/../flags/${COMPILER_NAME}/debug_flags.txt" DEBUG_FLAGSSTRING)
+split_string_into_list("${DEBUG_FLAGS_STRING}" DEBUG_FLAGS_LIST)
+
+# Import sanitizer_flags.txt
+file(STRINGS "${CMAKE_SOURCE_DIR}/../flags/${COMPILER_NAME}/sanitizer_flags.txt" SANITIZER_FLAGS_STRING)
+split_string_into_list("${SANITIZER_FLAGS_STRING}" SANITIZER_FLAGS_LIST)
+
+# Check if the system uses 64-bit libraries
+get_property(LIB64 GLOBAL PROPERTY FIND_LIBRARY_USE_LIB64_PATHS)
+
+# Set the library suffix based on whether it's 64-bit or not
+if ("${LIB64}" STREQUAL "TRUE")
+    set(LIBSUFFIX 64)
+else()
+    set(LIBSUFFIX "")
+endif()
+
+target_link_directories(p101_env PRIVATE /usr/local/lib${LIBSUFFIX})
+
+# Enable sanitizer checks
+target_link_libraries(p101_env PRIVATE ${SANITIZER_FLAGS_STRING})
+
+# Link libraries
 target_link_libraries(p101_env PRIVATE p101_error)
 
 # Common compiler flags
@@ -42,36 +72,9 @@ set(STANDARD_FLAGS
     -Werror
 )
 
-# Initialize lists for compiler flags
-set(COMMON_FLAGS ${STANDARD_FLAGS})
-
-function(split_string_into_list _input_string _output_list)
-    string(REGEX REPLACE "[ ]+" ";" _split_list "${_input_string}")
-    set(${_output_list} ${_split_list} PARENT_SCOPE)
-endfunction()
-
-# Extract the compiler name without the path
-get_filename_component(COMPILER_NAME "${CMAKE_C_COMPILER}" NAME)
-
-# Import warning_flags.txt
-file(STRINGS "${CMAKE_SOURCE_DIR}/../${COMPILER_NAME}_warning_flags.txt" WARNING_FLAGS_STRING)
-split_string_into_list("${WARNING_FLAGS_STRING}" WARNING_FLAGS_LIST)
-
-# Import analyzer_flags.txt
-file(STRINGS "${CMAKE_SOURCE_DIR}/../${COMPILER_NAME}_analyzer_flags.txt" ANALYZER_FLAGS_STRING)
-split_string_into_list("${WARNING_FLAGS_STRING}" ANALYZER_FLAGS_LIST)
-
-# Import debug_flags.txt
-file(STRINGS "${CMAKE_SOURCE_DIR}/../${COMPILER_NAME}_debug_flags.txt" DEBUG_FLAGSSTRING)
-split_string_into_list("${DEBUG_FLAGS_STRING}" DEBUG_FLAGS_LIST)
-
-# Import sanitizer_flags.txt
-file(STRINGS "${CMAKE_SOURCE_DIR}/../${COMPILER_NAME}_sanitizer_flags.txt" SANITIZER_FLAGS_STRING)
-split_string_into_list("${SANITIZER_FLAGS_STRING}" SANITIZER_FLAGS_LIST)
-
 # Set compiler flags for the target
 target_compile_options(p101_env PRIVATE
-        ${COMMON_FLAGS}
+        ${STANDARD_FLAGS}
         ${WARNING_FLAGS_LIST}
         ${ANALYZER_FLAGS_LIST}
         ${DEBUG_FLAGS_LIST}
@@ -79,8 +82,8 @@ target_compile_options(p101_env PRIVATE
 )
 
 # Get compiler flags for the target
-get_target_property(COMPILE_OPTIONS p101_env COMPILE_OPTIONS)
-string(REPLACE ";" " " COMPILE_OPTIONS_STR "${COMPILE_OPTIONS}")
+# get_target_property(COMPILE_OPTIONS p101_env COMPILE_OPTIONS)
+# string(REPLACE ";" " " COMPILE_OPTIONS_STR "${COMPILE_OPTIONS}")
 
 find_program(CLANG_FORMAT NAMES "clang-format" REQUIRED)
 find_program(CLANG_TIDY NAMES "clang-tidy" REQUIRED)
@@ -88,30 +91,30 @@ find_program(CPPCHECK NAMES "cppcheck" REQUIRED)
 
 # Format source files using clang-format
 add_custom_target(format
-        COMMAND ${CLANG_FORMAT} --style=file -i ${SOURCES} ${HEADER_LIST} ${HEADER_LIST_ARPA} ${HEADER_LIST_NET} ${HEADER_LIST_SYS}
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        COMMENT "Running clang-format"
+    COMMAND ${CLANG_FORMAT} --style=file -i ${SOURCES} ${HEADER_LIST} ${HEADER_LIST_ARPA} ${HEADER_LIST_NET} ${HEADER_LIST_SYS}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Running clang-format"
 )
 
 # Lint source files using clang-tidy
 add_custom_target(lint
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        COMMAND ${CLANG_TIDY} ${SOURCES} -quiet --warnings-as-errors='*' -checks=*,-llvmlibc-restrict-system-libc-headers,-altera-struct-pack-align,-readability-identifier-length,-altera-unroll-loops,-cppcoreguidelines-init-variables,-cert-err33-c,-modernize-macro-to-enum,-bugprone-easily-swappable-parameters,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-altera-id-dependent-backward-branch,-concurrency-mt-unsafe,-misc-unused-parameters,-hicpp-signed-bitwise,-google-readability-todo,-cert-msc30-c,-cert-msc50-cpp,-readability-function-cognitive-complexity,-clang-analyzer-security.insecureAPI.strcpy,-cert-env33-c,-android-cloexec-accept,-clang-analyzer-security.insecureAPI.rand,-misc-include-cleaner -- ${CMAKE_C_FLAGS} ${COMMON_FLAGS} -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include
-        COMMENT "Running clang-tidy"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMAND ${CLANG_TIDY} ${SOURCES} -quiet --warnings-as-errors='*' -checks=*,-llvmlibc-restrict-system-libc-headers,-altera-struct-pack-align,-readability-identifier-length,-altera-unroll-loops,-cppcoreguidelines-init-variables,-cert-err33-c,-modernize-macro-to-enum,-bugprone-easily-swappable-parameters,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-altera-id-dependent-backward-branch,-concurrency-mt-unsafe,-misc-unused-parameters,-hicpp-signed-bitwise,-google-readability-todo,-cert-msc30-c,-cert-msc50-cpp,-readability-function-cognitive-complexity,-clang-analyzer-security.insecureAPI.strcpy,-cert-env33-c,-android-cloexec-accept,-clang-analyzer-security.insecureAPI.rand,-misc-include-cleaner -- ${CMAKE_C_FLAGS} ${STANDARD_FLAGS} -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include
+    COMMENT "Running clang-tidy"
 )
 
 # Add a custom target for clang --analyze
 add_custom_target(analysis
-        COMMAND ${CMAKE_C_COMPILER} --analyzer-output text --analyze -Xclang -analyzer-checker=core --analyze -Xclang -analyzer-checker=deadcode -Xclang -analyzer-checker=security -Xclang -analyzer-checker=unix -Xclang -analyzer-checker=unix ${CMAKE_C_FLAGS} ${COMMON_FLAGS} -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include ${SOURCES}
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        COMMENT "Running clang --analyze"
+    COMMAND ${CMAKE_C_COMPILER} --analyzer-output text --analyze -Xclang -analyzer-checker=core --analyze -Xclang -analyzer-checker=deadcode -Xclang -analyzer-checker=security -Xclang -analyzer-checker=unix -Xclang -analyzer-checker=unix ${CMAKE_C_FLAGS} ${STANDARD_FLAGS} -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include ${SOURCES}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Running clang --analyze"
 )
 
 # Add a custom target for cppcheck
 add_custom_target(cppcheck
-        COMMAND ${CPPCHECK} --error-exitcode=1 --force --quiet --library=posix --enable=all --suppress=missingIncludeSystem --suppress=unusedFunction --suppress=unmatchedSuppression -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include ${SOURCES}
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        COMMENT "Running cppcheck"
+    COMMAND ${CPPCHECK} --error-exitcode=1 --force --quiet --library=posix --enable=all --suppress=missingIncludeSystem --suppress=unusedFunction --suppress=unmatchedSuppression -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include ${SOURCES}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Running cppcheck"
 )
 
 # Check if CMAKE_C_COMPILER starts with "clang"
@@ -133,16 +136,6 @@ add_dependencies(p101_env format)
 
 # Set the default target to be 'strict'
 add_custom_target(default_target DEPENDS strict)
-
-# Check if the system uses 64-bit libraries
-get_property(LIB64 GLOBAL PROPERTY FIND_LIBRARY_USE_LIB64_PATHS)
-
-# Set the library suffix based on whether it's 64-bit or not
-if ("${LIB64}" STREQUAL "TRUE")
-    set(LIBSUFFIX 64)
-else()
-    set(LIBSUFFIX "")
-endif()
 
 # Define the installation directory for libraries
 set(INSTALL_LIB_DIR lib${LIBSUFFIX} CACHE PATH "Installation directory for libraries")
