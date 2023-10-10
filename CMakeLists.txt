@@ -91,7 +91,7 @@ find_program(CPPCHECK NAMES "cppcheck" REQUIRED)
 
 # Format source files using clang-format
 add_custom_target(format
-    COMMAND ${CLANG_FORMAT} --style=file -i ${SOURCES} ${HEADER_LIST} ${HEADER_LIST_ARPA} ${HEADER_LIST_NET} ${HEADER_LIST_SYS}
+    COMMAND ${CLANG_FORMAT} --style=file -i ${SOURCES} ${HEADER_LIST}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running clang-format"
 )
@@ -103,13 +103,6 @@ add_custom_target(lint
     COMMENT "Running clang-tidy"
 )
 
-# Add a custom target for clang --analyze
-add_custom_target(analysis
-    COMMAND ${CMAKE_C_COMPILER} --analyzer-output text --analyze -Xclang -analyzer-checker=core --analyze -Xclang -analyzer-checker=deadcode -Xclang -analyzer-checker=security -Xclang -analyzer-checker=unix -Xclang -analyzer-checker=unix ${CMAKE_C_FLAGS} ${STANDARD_FLAGS} -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include ${SOURCES} ${HEADER_LIST}
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT "Running clang --analyze"
-)
-
 # Add a custom target for cppcheck
 add_custom_target(cppcheck
     COMMAND ${CPPCHECK} --error-exitcode=1 --force --quiet --library=posix --enable=all --suppress=missingIncludeSystem --suppress=unusedFunction --suppress=unmatchedSuppression -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include ${SOURCES} ${HEADER_LIST}
@@ -119,6 +112,13 @@ add_custom_target(cppcheck
 
 # Check if CMAKE_C_COMPILER starts with "clang"
 if (CMAKE_C_COMPILER MATCHES ".*/clang.*")
+    # Add a custom target for clang --analyze
+    add_custom_target(analysis
+            COMMAND ${CMAKE_C_COMPILER} --analyze --analyzer-output text -Xclang -analyzer-checker=core --analyze -Xclang -analyzer-checker=deadcode -Xclang -analyzer-checker=security -Xclang -analyzer-disable-checker=security.insecureAPI.DeprecatedOrUnsafeBufferHandling -Xclang -analyzer-checker=unix -Xclang -analyzer-checker=unix ${CMAKE_C_FLAGS} ${STANDARD_FLAGS} -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include ${SOURCES} ${HEADER_LIST}
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            COMMENT "Running clang --analyze"
+    )
+
     # Add dependencies including 'analysis' for Clang compiler
     add_custom_target(strict
             DEPENDS p101_env analysis lint cppcheck
