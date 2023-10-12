@@ -119,6 +119,13 @@ if (CMAKE_C_COMPILER MATCHES ".*/clang.*")
             COMMENT "Running clang --analyze"
     )
 
+    # Add a custom command to delete .gch files after the analysis
+    add_custom_command(
+            TARGET analysis POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E remove ${CMAKE_SOURCE_DIR}/include/p101_env/*.gch
+            COMMENT "Removing .gch files"
+    )
+
     # Add dependencies including 'analysis' for Clang compiler
     add_custom_target(strict
             DEPENDS p101_env analysis lint cppcheck
