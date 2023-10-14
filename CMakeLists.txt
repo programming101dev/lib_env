@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.10)
 project(p101_env
-        VERSION 0.0.1
-        DESCRIPTION ""
-        LANGUAGES C)
+    VERSION 0.0.1
+    DESCRIPTION ""
+    LANGUAGES C)
 
 message(STATUS "Compiler being used: ${CMAKE_C_COMPILER}")
 
@@ -74,20 +74,16 @@ set(STANDARD_FLAGS
 
 # Set compiler flags for the target
 target_compile_options(p101_env PRIVATE
-        ${STANDARD_FLAGS}
-        ${WARNING_FLAGS_LIST}
-        ${ANALYZER_FLAGS_LIST}
-        ${DEBUG_FLAGS_LIST}
-        ${SANITIZER_FLAGS_LIST}
+    ${STANDARD_FLAGS}
+    ${WARNING_FLAGS_LIST}
+    ${ANALYZER_FLAGS_LIST}
+    ${DEBUG_FLAGS_LIST}
+    ${SANITIZER_FLAGS_LIST}
 )
 
-# Get compiler flags for the target
-# get_target_property(COMPILE_OPTIONS p101_env COMPILE_OPTIONS)
-# string(REPLACE ";" " " COMPILE_OPTIONS_STR "${COMPILE_OPTIONS}")
-
-find_program(CLANG_FORMAT NAMES "clang-format" REQUIRED)
-find_program(CLANG_TIDY NAMES "clang-tidy" REQUIRED)
-find_program(CPPCHECK NAMES "cppcheck" REQUIRED)
+find_program(CLANG_FORMAT NAMES ${CLANG_FORMAT_NAME} REQUIRED)
+find_program(CLANG_TIDY NAMES ${CLANG_TIDY_NAME} REQUIRED)
+find_program(CPPCHECK NAMES ${CPPCHECK_NAME} REQUIRED)
 
 # Format source files using clang-format
 add_custom_target(format
@@ -114,28 +110,28 @@ add_custom_target(cppcheck
 if (CMAKE_C_COMPILER MATCHES ".*/clang.*")
     # Add a custom target for clang --analyze
     add_custom_target(analysis
-            COMMAND ${CMAKE_C_COMPILER} --analyze --analyzer-output text -Xclang -analyzer-checker=core --analyze -Xclang -analyzer-checker=deadcode -Xclang -analyzer-checker=security -Xclang -analyzer-disable-checker=security.insecureAPI.DeprecatedOrUnsafeBufferHandling -Xclang -analyzer-checker=unix -Xclang -analyzer-checker=unix ${CMAKE_C_FLAGS} ${STANDARD_FLAGS} -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include ${SOURCES} ${HEADER_LIST}
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-            COMMENT "Running clang --analyze"
+        COMMAND ${CMAKE_C_COMPILER} --analyze --analyzer-output text -Xclang -analyzer-checker=core --analyze -Xclang -analyzer-checker=deadcode -Xclang -analyzer-checker=security -Xclang -analyzer-disable-checker=security.insecureAPI.DeprecatedOrUnsafeBufferHandling -Xclang -analyzer-checker=unix -Xclang -analyzer-checker=unix ${CMAKE_C_FLAGS} ${STANDARD_FLAGS} -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include ${SOURCES} ${HEADER_LIST}
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Running clang --analyze"
     )
 
     # Add a custom command to delete .gch files after the analysis
     add_custom_command(
-            TARGET analysis POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E remove ${CMAKE_SOURCE_DIR}/include/p101_env/*.gch
-            COMMENT "Removing .gch files"
+        TARGET analysis POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E remove ${CMAKE_SOURCE_DIR}/include/p101_env/*.gch
+        COMMENT "Removing .gch files"
     )
 
     # Add dependencies including 'analysis' for Clang compiler
     add_custom_target(strict
-            DEPENDS p101_env analysis lint cppcheck
-            COMMENT "Running code analysis tools"
+        DEPENDS p101_env analysis lint cppcheck
+        COMMENT "Running code analysis tools"
     )
 else()
     # Add dependencies without 'analysis' for other compilers
     add_custom_target(strict
-            DEPENDS p101_env lint cppcheck
-            COMMENT "Running code analysis tools"
+        DEPENDS p101_env lint cppcheck
+        COMMENT "Running code analysis tools"
     )
 endif()
 
@@ -149,17 +145,17 @@ set(INSTALL_LIB_DIR lib${LIBSUFFIX} CACHE PATH "Installation directory for libra
 mark_as_advanced(INSTALL_LIB_DIR)
 
 set_target_properties(p101_env PROPERTIES
-        VERSION ${PROJECT_VERSION}
-        SOVERSION ${PROJECT_VERSION_MAJOR})
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR})
 
 # Install the library target
 install(TARGETS p101_env
-        LIBRARY DESTINATION ${INSTALL_LIB_DIR}
-        COMPONENT library
-        NAMELINK_COMPONENT development
+    LIBRARY DESTINATION ${INSTALL_LIB_DIR}
+    COMPONENT library
+    NAMELINK_COMPONENT development
 )
 
 # Install header files
 install(FILES ${HEADER_LIST}
-        DESTINATION include/p101_env
+    DESTINATION include/p101_env
 )
