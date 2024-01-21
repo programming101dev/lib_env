@@ -32,19 +32,19 @@ function(split_string_into_list _input_string _output_list)
 endfunction()
 
 # Import warning_flags.txt
-file(STRINGS "${CMAKE_SOURCE_DIR}/../flags/${COMPILER_NAME}/warning_flags.txt" WARNING_FLAGS_STRING)
+file(STRINGS "${CMAKE_SOURCE_DIR}/.flags/${COMPILER_NAME}/warning_flags.txt" WARNING_FLAGS_STRING)
 split_string_into_list("${WARNING_FLAGS_STRING}" WARNING_FLAGS_LIST)
 
 # Import analyzer_flags.txt
-file(STRINGS "${CMAKE_SOURCE_DIR}/../flags/${COMPILER_NAME}/analyzer_flags.txt" ANALYZER_FLAGS_STRING)
+file(STRINGS "${CMAKE_SOURCE_DIR}/.flags/${COMPILER_NAME}/analyzer_flags.txt" ANALYZER_FLAGS_STRING)
 split_string_into_list("${ANALYZER_FLAGS_STRING}" ANALYZER_FLAGS_LIST)
 
 # Import debug_flags.txt
-file(STRINGS "${CMAKE_SOURCE_DIR}/../flags/${COMPILER_NAME}/debug_flags.txt" DEBUG_FLAGSSTRING)
+file(STRINGS "${CMAKE_SOURCE_DIR}/.flags/${COMPILER_NAME}/debug_flags.txt" DEBUG_FLAGSSTRING)
 split_string_into_list("${DEBUG_FLAGS_STRING}" DEBUG_FLAGS_LIST)
 
 # Import sanitizer_flags.txt
-file(STRINGS "${CMAKE_SOURCE_DIR}/../flags/${COMPILER_NAME}/sanitizer_flags.txt" SANITIZER_FLAGS_STRING)
+file(STRINGS "${CMAKE_SOURCE_DIR}/.flags/${COMPILER_NAME}/sanitizer_flags.txt" SANITIZER_FLAGS_STRING)
 split_string_into_list("${SANITIZER_FLAGS_STRING}" SANITIZER_FLAGS_LIST)
 
 # Check if the system uses 64-bit libraries
