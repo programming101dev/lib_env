@@ -54,7 +54,7 @@ process_compiler_flags()
     flags_string=$(IFS=" "; echo "${supported_flags[*]}")
 
     # Write to file without trailing space
-    printf "%s" "$flags_string" > "../.flags/${compiler}/${flag_category}_flags.txt"
+    printf "%s" "$flags_string" > "./.flags/${compiler}/${flag_category}_flags.txt"
 }
 
 # Main processing function
@@ -938,7 +938,7 @@ process_flags()
     echo "Checking: $compiler"
 
     # Prepare directory
-    local flag_dir="../.flags/${compiler}"
+    local flag_dir="./.flags/${compiler}"
     mkdir -p "$flag_dir"
     rm -f "$flag_dir"/*
 
