@@ -951,23 +951,17 @@ process_flags()
 
 darwin_architecture=$(detect_architecture)
 
+if [ ! -f "supported_c_compilers.txt" ]; then
+  ./check-compilers.sh
+fi
+
 # Read the list of supported compilers and process each
 supported_c_compilers=()
 while IFS= read -r line; do
     supported_c_compilers+=("$line")
 done < supported_c_compilers.txt
 
-supported_cxx_compilers=()
-while IFS= read -r line; do
-    supported_cxx_compilers+=("$line")
-done < supported_cxx_compilers.txt
-
 # Process C compilers
 for compiler in "${supported_c_compilers[@]}"; do
-    process_flags "$compiler"
-done
-
-# Process C++ compilers
-for compiler in "${supported_cxx_compilers[@]}"; do
     process_flags "$compiler"
 done
