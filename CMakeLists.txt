@@ -31,21 +31,25 @@ function(split_string_into_list _input_string _output_list)
     set(${_output_list} ${_split_list} PARENT_SCOPE)
 endfunction()
 
-# Import warning_flags.txt
-file(STRINGS "${CMAKE_SOURCE_DIR}/.flags/${COMPILER_NAME}/warning_flags.txt" WARNING_FLAGS_STRING)
-split_string_into_list("${WARNING_FLAGS_STRING}" WARNING_FLAGS_LIST)
-
 # Import analyzer_flags.txt
-file(STRINGS "${CMAKE_SOURCE_DIR}/.flags/${COMPILER_NAME}/analyzer_flags.txt" ANALYZER_FLAGS_STRING)
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/analyzer_flags.txt" ANALYZER_FLAGS_STRING)
 split_string_into_list("${ANALYZER_FLAGS_STRING}" ANALYZER_FLAGS_LIST)
 
 # Import debug_flags.txt
-file(STRINGS "${CMAKE_SOURCE_DIR}/.flags/${COMPILER_NAME}/debug_flags.txt" DEBUG_FLAGSSTRING)
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/debug_flags.txt" DEBUG_FLAGS_STRING)
 split_string_into_list("${DEBUG_FLAGS_STRING}" DEBUG_FLAGS_LIST)
 
-# Import sanitizer_flags.txt
-file(STRINGS "${CMAKE_SOURCE_DIR}/.flags/${COMPILER_NAME}/sanitizer_flags.txt" SANITIZER_FLAGS_STRING)
-split_string_into_list("${SANITIZER_FLAGS_STRING}" SANITIZER_FLAGS_LIST)
+# Import instrumentation_flags.txt
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/instrumentation_flags.txt" INSTRUMENTATION_FLAGS_STRING)
+split_string_into_list("${INSTRUMENTATION_FLAGS_STRING}" INSTRUMENTATION_FLAGS_LIST)
+
+# Import optimization_flags.txt
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/optimization_flags.txt" OPTIMIZATION_FLAGS_STRING)
+split_string_into_list("${OPTIMIZATION_FLAGS_STRING}" OPTIMIZATION_FLAGS_LIST)
+
+# Import warning_flags.txt
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/warning_flags.txt" WARNING_FLAGS_STRING)
+split_string_into_list("${WARNING_FLAGS_STRING}" WARNING_FLAGS_LIST)
 
 # Check if the system uses 64-bit libraries
 get_property(LIB64 GLOBAL PROPERTY FIND_LIBRARY_USE_LIB64_PATHS)
@@ -72,11 +76,12 @@ set(STANDARD_FLAGS
 
 # Set compiler flags for the target
 target_compile_options(p101_env PRIVATE
-    ${STANDARD_FLAGS}
-    ${WARNING_FLAGS_LIST}
-    ${ANALYZER_FLAGS_LIST}
-    ${DEBUG_FLAGS_LIST}
-    ${SANITIZER_FLAGS_LIST}
+        ${STANDARD_FLAGS}
+        ${ANALYZER_FLAGS_LIST}
+        ${DEBUG_FLAGS_LIST}
+        ${INSTRUMENTATION_FLAGS_LIST}
+        ${OPTIMIZATION_FLAGS_LIST}
+        ${WARNING_FLAGS_LIST}
 )
 
 if (NOT DEFINED CLANG_FORMAT_NAME)
