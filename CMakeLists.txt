@@ -51,6 +51,69 @@ split_string_into_list("${OPTIMIZATION_FLAGS_STRING}" OPTIMIZATION_FLAGS_LIST)
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/warning_flags.txt" WARNING_FLAGS_STRING)
 split_string_into_list("${WARNING_FLAGS_STRING}" WARNING_FLAGS_LIST)
 
+if(SANITIZER_address STREQUAL "ON")
+    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/address_sanitizer_flags.txt" ADDRESS_SANITIZER_FLAGS_STRING)
+    split_string_into_list("${ADDRESS_SANITIZER_FLAGS_STRING}" ADDRESS_SANITIZER_FLAGS_LIST)
+    target_compile_options(p101_env PRIVATE ${ADDRESS_SANITIZER_FLAGS_LIST})
+    target_link_options(p101_env PRIVATE ${ADDRESS_SANITIZER_FLAGS_LIST})
+endif()
+
+if(SANITIZER_cfi STREQUAL "ON")
+    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/cfi_sanitizer_flags.txt" CFI_SANITIZER_FLAGS_STRING)
+    split_string_into_list("${CFI_SANITIZER_FLAGS_STRING}" CFI_SANITIZER_FLAGS_LIST)
+    target_compile_options(p101_env PRIVATE ${CFI_SANITIZER_FLAGS_LIST})
+    target_link_options(p101_env PRIVATE ${CFI_SANITIZER_FLAGS_LIST})
+endif()
+
+if(SANITIZER_dataflow STREQUAL "ON")
+    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/dataflow_sanitizer_flags.txt" DATAFLOW_SANITIZER_FLAGS_STRING)
+    split_string_into_list("${DATAFLOW_SANITIZER_FLAGS_STRING}" DATAFLOW_SANITIZER_FLAGS_LIST)
+    target_compile_options(p101_env PRIVATE ${DATAFLOW_SANITIZER_FLAGS_LIST})
+    target_link_options(p101_env PRIVATE ${DATAFLOW_SANITIZER_FLAGS_LIST})
+endif()
+
+if(SANITIZER_hwaddress STREQUAL "ON")
+    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/hwaddress_sanitizer_flags.txt" HWADDRESS_SANITIZER_FLAGS_STRING)
+    split_string_into_list("${HWADDRESS_SANITIZER_FLAGS_STRING}" HWADDRESS_SANITIZER_FLAGS_LIST)
+    target_compile_options(p101_env PRIVATE ${HWADDRESS_SANITIZER_FLAGS_LIST})
+    target_link_options(p101_env PRIVATE ${HWADDRESS_SANITIZER_FLAGS_LIST})
+endif()
+
+if(SANITIZER_memory STREQUAL "ON")
+    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/memory_sanitizer_flags.txt" MEMORY_SANITIZER_FLAGS_STRING)
+    split_string_into_list("${MEMORY_SANITIZER_FLAGS_STRING}" MEMORY_SANITIZER_FLAGS_LIST)
+    target_compile_options(p101_env PRIVATE ${MEMORY_SANITIZER_FLAGS_LIST})
+    target_link_options(p101_env PRIVATE ${MEMORY_SANITIZER_FLAGS_LIST})
+endif()
+
+if(SANITIZER_pointer_overflow STREQUAL "ON")
+    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/pointer_overflow_sanitizer_flags.txt" POINTER_OVERFLOW_SANITIZER_FLAGS_STRING)
+    split_string_into_list("${POINTER_OVERFLOW_FLAGS_STRING}" POINTER_OVERFLOW_SANITIZER_FLAGS_LIST)
+    target_compile_options(p101_env PRIVATE ${POINTER_OVERFLOW_SANITIZER_FLAGS_LIST})
+    target_link_options(p101_env PRIVATE ${POINTER_OVERFLOW_SANITIZER_FLAGS_LIST})
+endif()
+
+if(SANITIZER_safe_stack STREQUAL "ON")
+    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/safe_stack_sanitizer_flags.txt" SAFE_STACK_SANITIZER_FLAGS_STRING)
+    split_string_into_list("${SAFE_STACK_FLAGS_STRING}" SAFE_STACK_SANITIZER_FLAGS_LIST)
+    target_compile_options(p101_env PRIVATE ${SAFE_STACK_SANITIZER_FLAGS_LIST})
+    target_link_options(p101_env PRIVATE ${SAFE_STACK_SANITIZER_FLAGS_LIST})
+endif()
+
+if(SANITIZER_thread STREQUAL "ON")
+    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/thread_sanitizer_flags.txt" THREAD_SANITIZER_FLAGS_STRING)
+    split_string_into_list("${THREAD_FLAGS_STRING}" THREAD_SANITIZER_FLAGS_LIST)
+    target_compile_options(p101_env PRIVATE ${THREAD_SANITIZER_FLAGS_LIST})
+    target_link_options(p101_env PRIVATE ${THREAD_SANITIZER_FLAGS_LIST})
+endif()
+
+if(SANITIZER_undefined STREQUAL "ON")
+    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/undefined_sanitizer_flags.txt" UNDEFINED_SANITIZER_FLAGS_STRING)
+    split_string_into_list("${UNDEFINED_SANITIZER_FLAGS_STRING}" UNDEFINED_SANITIZER_FLAGS_LIST)
+    target_compile_options(p101_env PRIVATE ${UNDEFINED_SANITIZER_FLAGS_LIST})
+    target_link_options(p101_env PRIVATE ${UNDEFINED_SANITIZER_FLAGS_LIST})
+endif()
+
 # Check if the system uses 64-bit libraries
 get_property(LIB64 GLOBAL PROPERTY FIND_LIBRARY_USE_LIB64_PATHS)
 
@@ -62,9 +125,7 @@ else()
 endif()
 
 target_link_directories(p101_env PRIVATE /usr/local/lib${LIBSUFFIX})
-
-# Enable sanitizer checks
-target_link_libraries(p101_env PRIVATE ${SANITIZER_FLAGS_STRING})
+target_link_options(p101_env PRIVATE ${INSTRUMENTATION_FLAGS_LIST})
 
 # Link libraries
 target_link_libraries(p101_env PRIVATE p101_error)

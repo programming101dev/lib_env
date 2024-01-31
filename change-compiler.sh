@@ -2,15 +2,17 @@ c_compiler=""
 clang_format_name="clang-format"
 clang_tidy_name="clang-tidy"
 cppcheck_name="cppcheck"
+sanitizers="address,undefined"
 
 # Function to display script usage
 usage()
 {
-    echo "Usage: $0 -c <c compiler> [-f <clang-format>] [-t <clang-tidy>] [-k <cppcheck>]"
+    echo "Usage: $0 -c <c compiler> [-f <clang-format>] [-t <clang-tidy>] [-k <cppcheck>] [-s <sanitizers>]"
     echo "  -c c compiler   Specify the c++ compiler name (e.g. gcc or clang)"
     echo "  -f clang-format   Specify the clang-format name (e.g. clang-tidy or clang-tidy-17)"
     echo "  -t clang-tidy     Specify the clang-tidy name (e.g. clang-tidy or clang-tidy-17)"
     echo "  -k cppcheck       Specify the cppcheck name (e.g. cppcheck)"
+    echo "  -s sanitizers     Specify the sanitiers to use name (e.g. address,undefined)"
     exit 1
 }
 
@@ -28,6 +30,9 @@ while getopts ":c:f:t:k:" opt; do
       ;;
     k)
       cppcheck_name="$OPTARG"
+      ;;
+    s)
+      sanitizers="$OPTARG"
       ;;
     \?)
       echo "Invalid option: -$OPTARG" >&2
@@ -50,4 +55,11 @@ if [ ! -d "./.flags" ]; then
     ./generate-flags.sh
 fi
 
-cmake -S . -B build -DCMAKE_C_COMPILER="$c_compiler" -DCLANG_FORMAT_NAME="$clang_format_name" -DCLANG_TIDY_NAME="$clang_tidy_name" -DCPPCHECK_NAME="$cppcheck_name" -DCMAKE_BUILD_TYPE=Debug
+# Split the sanitizers string and construct flags
+IFS=',' read -ra SANITIZERS <<< "$sanitizers"
+for sanitizer in "${SANITIZERS[@]}"; do
+    sanitizer_flags+="-DSANITIZER_${sanitizer}=ON "
+done
+
+echo "$sanitizer_flags"
+cmake -S . -B build -DCMAKE_C_COMPILER="$c_compiler" -DCLANG_FORMAT_NAME="$clang_format_name" -DCLANG_TIDY_NAME="$clang_tidy_name" -DCPPCHECK_NAME="$cppcheck_name" $sanitizer_flags -DCMAKE_BUILD_TYPE=Debug
