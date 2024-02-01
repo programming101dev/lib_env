@@ -1,4 +1,4 @@
-# c-examples Repository Guide
+# lib_env Repository Guide
 
 Welcome to the `lib env` repository. This guide will help you set up and run the provided scripts.
 
