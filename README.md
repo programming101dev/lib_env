@@ -39,6 +39,9 @@ chmod +x *.sh
 
 If you are missing tools follow these [instructions](https://docs.google.com/document/d/1ZPqlPD1mie5iwJ2XAcNGz7WeA86dTLerFXs9sAuwCco/edit?usp=drive_link).
 
+You will need to install:
+- [libp101_error](https://github.com/programming101dev/lib_error)
+
 ## **Running the generate-cmakelists.sh Script**
 
 You will need to create the CMakeLists.txt file:
