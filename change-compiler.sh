@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 c_compiler=""
 clang_format_name="clang-format"
 clang_tidy_name="clang-tidy"
@@ -17,7 +19,7 @@ usage()
 }
 
 # Parse command-line options using getopt
-while getopts ":c:f:t:k:" opt; do
+while getopts ":c:f:t:k:s:" opt; do
   case $opt in
     c)
       c_compiler="$OPTARG"
