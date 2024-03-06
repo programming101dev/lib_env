@@ -36,6 +36,10 @@ file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/analyzer_flags
 split_string_into_list("${ANALYZER_FLAGS_STRING}" ANALYZER_FLAGS_LIST)
 
 # Import debug_flags.txt
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/code_generation_flags.txt" CODE_GENERATION_FLAGS_STRING)
+split_string_into_list("${CODE_GENERATION_FLAGS_STRING}" DEBUG_FLAGS_LIST)
+
+# Import debug_flags.txt
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/debug_flags.txt" DEBUG_FLAGS_STRING)
 split_string_into_list("${DEBUG_FLAGS_STRING}" DEBUG_FLAGS_LIST)
 
@@ -79,6 +83,13 @@ if(SANITIZER_hwaddress STREQUAL "ON")
     target_link_options(p101_env PRIVATE ${HWADDRESS_SANITIZER_FLAGS_LIST})
 endif()
 
+if(SANITIZER_leak STREQUAL "ON")
+    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/leak_sanitizer_flags.txt" LEAK_SANITIZER_FLAGS_STRING)
+    string(REPLACE " " ";" LEAK_SANITIZER_FLAGS_LIST "${LEAK_SANITIZER_FLAGS_STRING}")
+    target_compile_options(p101_env PRIVATE ${LEAK_SANITIZER_FLAGS_LIST})
+    target_link_options(p101_env PRIVATE ${LEAK_SANITIZER_FLAGS_LIST})
+endif()
+
 if(SANITIZER_memory STREQUAL "ON")
     file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/memory_sanitizer_flags.txt" MEMORY_SANITIZER_FLAGS_STRING)
     string(REPLACE " " ";" MEMORY_SANITIZER_FLAGS_LIST "${MEMORY_SANITIZER_FLAGS_STRING}")
@@ -98,6 +109,13 @@ if(SANITIZER_safe_stack STREQUAL "ON")
     string(REPLACE " " ";" SAFE_STACK_SANITIZER_FLAGS_LIST "${SAFE_STACK_SANITIZER_FLAGS_STRING}")
     target_compile_options(p101_env PRIVATE ${SAFE_STACK_SANITIZER_FLAGS_LIST})
     target_link_options(p101_env PRIVATE ${SAFE_STACK_SANITIZER_FLAGS_LIST})
+endif()
+
+if(SANITIZER_safe_stack STREQUAL "ON")
+    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/shadow_call_stack_sanitizer_flags.txt" SHADOW_CALL_STACK_SANITIZER_FLAGS_STRING)
+    string(REPLACE " " ";" SHADOW_CALL_STACK_SANITIZER_FLAGS_LIST "${SHADOW_CALL_STACK_SANITIZER_FLAGS_STRING}")
+    target_compile_options(p101_env PRIVATE ${SHADOW_CALL_STACK_SANITIZER_FLAGS_LIST})
+    target_link_options(p101_env PRIVATE ${SHADOW_CALL_STACK_SANITIZER_FLAGS_LIST})
 endif()
 
 if(SANITIZER_thread STREQUAL "ON")
