@@ -1,256 +1,205 @@
 cmake_minimum_required(VERSION 3.21)
-project(p101_env
-    VERSION 0.0.1
-    DESCRIPTION ""
-    LANGUAGES C)
 
-set(CMAKE_C_STANDARD 17)
-set(CMAKE_C_STANDARD_REQUIRED ON)
-set(CMAKE_C_EXTENSIONS OFF)
+# Load project configuration
+if(NOT EXISTS "${CMAKE_SOURCE_DIR}/config.cmake")
+    message(FATAL_ERROR "Missing config.cmake file. This file is required to define project settings.")
+endif()
+include("${CMAKE_SOURCE_DIR}/config.cmake")
 
-# Source files for the library
-set(SOURCES
-    ${CMAKE_SOURCE_DIR}/src/env.c
-)
+message(STATUS "Loaded config.cmake variables:")
+message(STATUS "  PROJECT_NAME: ${PROJECT_NAME}")
+message(STATUS "  PROJECT_VERSION: ${PROJECT_VERSION}")
+message(STATUS "  PROJECT_DESCRIPTION: ${PROJECT_DESCRIPTION}")
+message(STATUS "  EXECUTABLE_TARGETS: ${EXECUTABLE_TARGETS}")
+message(STATUS "  LIBRARY_TARGETS: ${LIBRARY_TARGETS}")
 
-# Define the list of header files to install
-set(HEADER_LIST
-    ${CMAKE_SOURCE_DIR}/include/p101_env/env.h
-)
+# Ensure required variables are set
+set(REQUIRED_VARS PROJECT_NAME PROJECT_VERSION PROJECT_DESCRIPTION)
+foreach(VAR ${REQUIRED_VARS})
+    if(NOT DEFINED ${VAR})
+        message(FATAL_ERROR "${VAR} is not defined in config.cmake")
+    endif()
+endforeach()
 
-# Build the shared library
-add_library(p101_env SHARED ${SOURCES})
-target_include_directories(p101_env PRIVATE /usr/local/include)
-target_include_directories(p101_env PUBLIC ${CMAKE_SOURCE_DIR}/include)
+# Print loaded project information
+message(STATUS "Project Name: ${PROJECT_NAME}")
+message(STATUS "Project Version: ${PROJECT_VERSION}")
+message(STATUS "Project Description: ${PROJECT_DESCRIPTION}")
 
-# Extract the compiler name without the path
+# Ensure at least one of EXECUTABLE_TARGETS or LIBRARY_TARGETS is defined
+if(NOT (DEFINED EXECUTABLE_TARGETS OR DEFINED LIBRARY_TARGETS))
+    message(FATAL_ERROR "At least one of EXECUTABLE_TARGETS or LIBRARY_TARGETS must be defined.")
+endif()
+
+project(${PROJECT_NAME} VERSION ${PROJECT_VERSION} DESCRIPTION ${PROJECT_DESCRIPTION} LANGUAGES ${PROJECT_LANGUAGE})
+
+include(GNUInstallDirs)
+include_directories(/usr/local/include)
+link_directories(/usr/local/lib /usr/local/lib64)
+
+# Print compiler information
+message(STATUS "Using Compiler: ${CMAKE_C_COMPILER}")
+
+# Extract the compiler name from the full path
 get_filename_component(COMPILER_NAME "${CMAKE_C_COMPILER}" NAME)
+message(STATUS "Compiler Name: ${COMPILER_NAME}")
 
-function(split_string_into_list _input_string _output_list)
-    string(REGEX REPLACE "[ ]+" ";" _split_list "${_input_string}")
-    set(${_output_list} ${_split_list} PARENT_SCOPE)
-endfunction()
+# Define macro to ensure absolute paths
+macro(MAKE_ABSOLUTE_PATHS VAR_NAME)
+    set(TEMP_LIST "")
+    foreach(FILE ${${VAR_NAME}})
+        if(IS_ABSOLUTE ${FILE})
+            list(APPEND TEMP_LIST ${FILE})
+        else()
+            list(APPEND TEMP_LIST "${CMAKE_SOURCE_DIR}/${FILE}")
+        endif()
+    endforeach()
+    set(${VAR_NAME} ${TEMP_LIST})
+    message(STATUS "Processed paths for ${VAR_NAME}: ${${VAR_NAME}}")
+endmacro()
 
-# Import analyzer_flags.txt
-file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/analyzer_flags.txt" ANALYZER_FLAGS_STRING)
-split_string_into_list("${ANALYZER_FLAGS_STRING}" ANALYZER_FLAGS_LIST)
+# Find required tools dynamically
+find_program(CLANG_FORMAT NAMES ${CLANG_FORMAT_NAME})
+find_program(CLANG_TIDY NAMES ${CLANG_TIDY_NAME})
+find_program(CPPCHECK NAMES ${CPPCHECK_NAME})
 
-# Import debug_flags.txt
-file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/code_generation_flags.txt" CODE_GENERATION_FLAGS_STRING)
-split_string_into_list("${CODE_GENERATION_FLAGS_STRING}" DEBUG_FLAGS_LIST)
+# Print tool paths
+message(STATUS "Found clang-format: ${CLANG_FORMAT}")
+message(STATUS "Found clang-tidy: ${CLANG_TIDY}")
+message(STATUS "Found cppcheck: ${CPPCHECK}")
 
-# Import debug_flags.txt
-file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/debug_flags.txt" DEBUG_FLAGS_STRING)
-split_string_into_list("${DEBUG_FLAGS_STRING}" DEBUG_FLAGS_LIST)
-
-# Import instrumentation_flags.txt
-file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/instrumentation_flags.txt" INSTRUMENTATION_FLAGS_STRING)
-split_string_into_list("${INSTRUMENTATION_FLAGS_STRING}" INSTRUMENTATION_FLAGS_LIST)
-
-# Import optimization_flags.txt
-file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/optimization_flags.txt" OPTIMIZATION_FLAGS_STRING)
-split_string_into_list("${OPTIMIZATION_FLAGS_STRING}" OPTIMIZATION_FLAGS_LIST)
-
-# Import warning_flags.txt
-file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/warning_flags.txt" WARNING_FLAGS_STRING)
-split_string_into_list("${WARNING_FLAGS_STRING}" WARNING_FLAGS_LIST)
-
-if(SANITIZER_address STREQUAL "ON")
-    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/address_sanitizer_flags.txt" ADDRESS_SANITIZER_FLAGS_STRING)
-    string(REPLACE " " ";" ADDRESS_SANITIZER_FLAGS_LIST "${ADDRESS_SANITIZER_FLAGS_STRING}")
-    target_compile_options(p101_env PRIVATE ${ADDRESS_SANITIZER_FLAGS_LIST})
-    target_link_options(p101_env PRIVATE ${ADDRESS_SANITIZER_FLAGS_LIST})
+if(NOT CLANG_FORMAT OR NOT CLANG_TIDY OR NOT CPPCHECK)
+    message(FATAL_ERROR "Required tools (clang-format, clang-tidy, cppcheck) not found.")
 endif()
 
-if(SANITIZER_cfi STREQUAL "ON")
-    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/cfi_sanitizer_flags.txt" CFI_SANITIZER_FLAGS_STRING)
-    string(REPLACE " " ";" CFI_SANITIZER_FLAGS_LIST "${CFI_SANITIZER_FLAGS_STRING}")
-    target_compile_options(p101_env PRIVATE ${CFI_SANITIZER_FLAGS_LIST})
-    target_link_options(p101_env PRIVATE ${CFI_SANITIZER_FLAGS_LIST})
+# Process sanitizers from `SANITIZER_LIST`
+set(SANITIZER_FLAGS "")
+if(DEFINED SANITIZER_LIST AND NOT "${SANITIZER_LIST}" STREQUAL "")
+    string(REPLACE "," ";" SANITIZER_NAMES "${SANITIZER_LIST}")
+    message(STATUS "Sanitizers enabled: ${SANITIZER_NAMES}")
+
+    foreach(SAN ${SANITIZER_NAMES})
+        set(FLAG_FILE "${CMAKE_SOURCE_DIR}/.flags/${COMPILER_NAME}/${SAN}_sanitizer_flags.txt")
+        if(EXISTS "${FLAG_FILE}")
+            file(STRINGS "${FLAG_FILE}" SANITIZER_FLAGS_CONTENTS)
+            list(APPEND SANITIZER_FLAGS ${SANITIZER_FLAGS_CONTENTS})
+        else()
+            message(WARNING "⚠️ Sanitizer '${SAN}' requested but no flag file found: ${FLAG_FILE}")
+        endif()
+    endforeach()
 endif()
 
-if(SANITIZER_dataflow STREQUAL "ON")
-    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/dataflow_sanitizer_flags.txt" DATAFLOW_SANITIZER_FLAGS_STRING)
-    string(REPLACE " " ";" DATAFLOW_SANITIZER_FLAGS_LIST "${DATAFLOW_SANITIZER_FLAGS_STRING}")
-    target_compile_options(p101_env PRIVATE ${DATAFLOW_SANITIZER_FLAGS_LIST})
-    target_link_options(p101_env PRIVATE ${DATAFLOW_SANITIZER_FLAGS_LIST})
+# Ensure `ALL_SOURCE_FILES` is set before formatting
+set(ALL_SOURCE_FILES "")
+set(ALL_HEADER_FILES "")
+
+# Process Executables
+if(DEFINED EXECUTABLE_TARGETS)
+    foreach(EXE ${EXECUTABLE_TARGETS})
+        MAKE_ABSOLUTE_PATHS(${EXE}_SOURCES)
+        MAKE_ABSOLUTE_PATHS(${EXE}_HEADERS)
+
+        list(APPEND ALL_SOURCE_FILES ${${EXE}_SOURCES})
+        list(APPEND ALL_HEADER_FILES ${${EXE}_HEADERS})
+
+        message(STATUS "Executable ${EXE}:")
+        message(STATUS "  Sources: ${${EXE}_SOURCES}")
+        message(STATUS "  Headers: ${${EXE}_HEADERS}")
+        message(STATUS "  Link Libraries: ${${EXE}_LINK_LIBRARIES}")
+    endforeach()
 endif()
 
-if(SANITIZER_hwaddress STREQUAL "ON")
-    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/hwaddress_sanitizer_flags.txt" HWADDRESS_SANITIZER_FLAGS_STRING)
-    string(REPLACE " " ";" HWADDRESS_SANITIZER_FLAGS_LIST "${HWADDRESS_SANITIZER_FLAGS_STRING}")
-    target_compile_options(p101_env PRIVATE ${HWADDRESS_SANITIZER_FLAGS_LIST})
-    target_link_options(p101_env PRIVATE ${HWADDRESS_SANITIZER_FLAGS_LIST})
+# Process Libraries
+if(DEFINED LIBRARY_TARGETS)
+    foreach(LIB ${LIBRARY_TARGETS})
+        MAKE_ABSOLUTE_PATHS(${LIB}_SOURCES)
+        MAKE_ABSOLUTE_PATHS(${LIB}_HEADERS)
+
+        list(APPEND ALL_SOURCE_FILES ${${LIB}_SOURCES})
+        list(APPEND ALL_HEADER_FILES ${${LIB}_HEADERS})
+
+        message(STATUS "Library ${LIB}:")
+        message(STATUS "  Sources: ${${LIB}_SOURCES}")
+        message(STATUS "  Headers: ${${LIB}_HEADERS}")
+        message(STATUS "  Link Libraries: ${${LIB}_LINK_LIBRARIES}")
+    endforeach()
 endif()
 
-if(SANITIZER_leak STREQUAL "ON")
-    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/leak_sanitizer_flags.txt" LEAK_SANITIZER_FLAGS_STRING)
-    string(REPLACE " " ";" LEAK_SANITIZER_FLAGS_LIST "${LEAK_SANITIZER_FLAGS_STRING}")
-    target_compile_options(p101_env PRIVATE ${LEAK_SANITIZER_FLAGS_LIST})
-    target_link_options(p101_env PRIVATE ${LEAK_SANITIZER_FLAGS_LIST})
-endif()
-
-if(SANITIZER_memory STREQUAL "ON")
-    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/memory_sanitizer_flags.txt" MEMORY_SANITIZER_FLAGS_STRING)
-    string(REPLACE " " ";" MEMORY_SANITIZER_FLAGS_LIST "${MEMORY_SANITIZER_FLAGS_STRING}")
-    target_compile_options(p101_env PRIVATE ${MEMORY_SANITIZER_FLAGS_LIST})
-    target_link_options(p101_env PRIVATE ${MEMORY_SANITIZER_FLAGS_LIST})
-endif()
-
-if(SANITIZER_pointer_overflow STREQUAL "ON")
-    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/pointer_overflow_sanitizer_flags.txt" POINTER_OVERFLOW_SANITIZER_FLAGS_STRING)
-    string(REPLACE " " ";" POINTER_OVERFLOW_SANITIZER_FLAGS_LIST "${POINTER_OVERFLOW_SANITIZER_FLAGS_STRING}")
-    target_compile_options(p101_env PRIVATE ${POINTER_OVERFLOW_SANITIZER_FLAGS_LIST})
-    target_link_options(p101_env PRIVATE ${POINTER_OVERFLOW_SANITIZER_FLAGS_LIST})
-endif()
-
-if(SANITIZER_safe_stack STREQUAL "ON")
-    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/safe_stack_sanitizer_flags.txt" SAFE_STACK_SANITIZER_FLAGS_STRING)
-    string(REPLACE " " ";" SAFE_STACK_SANITIZER_FLAGS_LIST "${SAFE_STACK_SANITIZER_FLAGS_STRING}")
-    target_compile_options(p101_env PRIVATE ${SAFE_STACK_SANITIZER_FLAGS_LIST})
-    target_link_options(p101_env PRIVATE ${SAFE_STACK_SANITIZER_FLAGS_LIST})
-endif()
-
-if(SANITIZER_safe_stack STREQUAL "ON")
-    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/shadow_call_stack_sanitizer_flags.txt" SHADOW_CALL_STACK_SANITIZER_FLAGS_STRING)
-    string(REPLACE " " ";" SHADOW_CALL_STACK_SANITIZER_FLAGS_LIST "${SHADOW_CALL_STACK_SANITIZER_FLAGS_STRING}")
-    target_compile_options(p101_env PRIVATE ${SHADOW_CALL_STACK_SANITIZER_FLAGS_LIST})
-    target_link_options(p101_env PRIVATE ${SHADOW_CALL_STACK_SANITIZER_FLAGS_LIST})
-endif()
-
-if(SANITIZER_thread STREQUAL "ON")
-    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/thread_sanitizer_flags.txt" THREAD_SANITIZER_FLAGS_STRING)
-    string(REPLACE " " ";" THREAD_SANITIZER_FLAGS_LIST "${THREAD_SANITIZER_FLAGS_STRING}")
-    target_compile_options(p101_env PRIVATE ${THREAD_SANITIZER_FLAGS_LIST})
-    target_link_options(p101_env PRIVATE ${THREAD_SANITIZER_FLAGS_LIST})
-endif()
-
-if(SANITIZER_undefined STREQUAL "ON")
-    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/.flags/${COMPILER_NAME}/undefined_sanitizer_flags.txt" UNDEFINED_SANITIZER_FLAGS_STRING)
-    string(REPLACE " " ";" UNDEFINED_SANITIZER_FLAGS_LIST "${UNDEFINED_SANITIZER_FLAGS_STRING}")
-    target_compile_options(p101_env PRIVATE ${UNDEFINED_SANITIZER_FLAGS_LIST})
-    target_link_options(p101_env PRIVATE ${UNDEFINED_SANITIZER_FLAGS_LIST})
-endif()
-
-# Check if the system uses 64-bit libraries
-get_property(LIB64 GLOBAL PROPERTY FIND_LIBRARY_USE_LIB64_PATHS)
-
-# Set the library suffix based on whether it's 64-bit or not
-if ("${LIB64}" STREQUAL "TRUE")
-    set(LIBSUFFIX 64)
-else()
-    set(LIBSUFFIX "")
-endif()
-
-target_link_directories(p101_env PRIVATE /usr/local/lib${LIBSUFFIX})
-target_link_options(p101_env PRIVATE ${INSTRUMENTATION_FLAGS_LIST})
-
-# Link libraries
-target_link_libraries(p101_env PRIVATE p101_error)
-
-# Common compiler flags
-set(STANDARD_FLAGS
-    -Werror
-)
-
-# Set compiler flags for the target
-target_compile_options(p101_env PRIVATE
-        ${STANDARD_FLAGS}
-        ${ANALYZER_FLAGS_LIST}
-        ${DEBUG_FLAGS_LIST}
-        ${INSTRUMENTATION_FLAGS_LIST}
-        ${OPTIMIZATION_FLAGS_LIST}
-        ${WARNING_FLAGS_LIST}
-)
-
-if (NOT DEFINED CLANG_FORMAT_NAME)
-    set(CLANG_FORMAT_NAME "clang-format")
-endif()
-
-if (NOT DEFINED CLANG_TIDY_NAME)
-    set(CLANG_TIDY_NAME "clang-tidy")
-endif()
-
-if (NOT DEFINED CPPCHECK_NAME)
-    set(CPPCHECK_NAME "cppcheck")
-endif()
-
-find_program(CLANG_FORMAT NAMES ${CLANG_FORMAT_NAME} REQUIRED)
-find_program(CLANG_TIDY NAMES ${CLANG_TIDY_NAME} REQUIRED)
-find_program(CPPCHECK NAMES ${CPPCHECK_NAME} REQUIRED)
-
-# Format source files using clang-format
+# Define Formatting Target (Runs First)
 add_custom_target(format
-    COMMAND ${CLANG_FORMAT} --style=file -i ${SOURCES} ${HEADER_LIST}
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT "Running clang-format"
-)
-
-# Lint source files using clang-tidy
-add_custom_target(lint
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMAND ${CLANG_TIDY} ${SOURCES} ${HEADER_LIST} -quiet --warnings-as-errors='*' -checks=*,-llvmlibc-restrict-system-libc-headers,-altera-struct-pack-align,-readability-identifier-length,-altera-unroll-loops,-cppcoreguidelines-init-variables,-cert-err33-c,-modernize-macro-to-enum,-bugprone-easily-swappable-parameters,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-altera-id-dependent-backward-branch,-concurrency-mt-unsafe,-misc-unused-parameters,-hicpp-signed-bitwise,-google-readability-todo,-cert-msc30-c,-cert-msc50-cpp,-readability-function-cognitive-complexity,-clang-analyzer-security.insecureAPI.strcpy,-cert-env33-c,-android-cloexec-accept,-clang-analyzer-security.insecureAPI.rand,-misc-include-cleaner,-llvm-header-guard,-cppcoreguidelines-macro-to-enum -- ${CMAKE_C_FLAGS} ${STANDARD_FLAGS} -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include
-    COMMENT "Running clang-tidy"
-)
-
-# Add a custom target for cppcheck
-add_custom_target(cppcheck
-    COMMAND ${CPPCHECK} --error-exitcode=1 --force --quiet --inline-suppr --check-level=exhaustive --library=posix --enable=all --suppress=missingIncludeSystem --suppress=unusedFunction --suppress=staticFunction --suppress=unmatchedSuppression --suppress=checkersReport -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include ${SOURCES} ${HEADER_LIST}
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT "Running cppcheck"
-)
-
-# Check if CMAKE_C_COMPILER starts with "clang"
-if (CMAKE_C_COMPILER MATCHES ".*/clang.*")
-    # Add a custom target for clang --analyze
-    add_custom_target(analysis
-        COMMAND ${CMAKE_C_COMPILER} --analyze --analyzer-output text -Xclang -analyzer-checker=core --analyze -Xclang -analyzer-checker=deadcode -Xclang -analyzer-checker=security -Xclang -analyzer-disable-checker=security.insecureAPI.DeprecatedOrUnsafeBufferHandling -Xclang -analyzer-checker=unix -Xclang -analyzer-checker=unix ${CMAKE_C_FLAGS} ${STANDARD_FLAGS} -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include ${SOURCES} ${HEADER_LIST}
+        COMMAND ${CLANG_FORMAT} --style=file -i ${ALL_SOURCE_FILES} ${ALL_HEADER_FILES}
+        COMMENT "Running clang-format"
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        COMMENT "Running clang --analyze"
-    )
+)
 
-    # Add a custom command to delete .gch files after the analysis
-    add_custom_command(
-        TARGET analysis POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E remove ${CMAKE_SOURCE_DIR}/include/p101_env/*.gch
-        COMMAND ${CMAKE_COMMAND} -E remove ${CMAKE_SOURCE_DIR}/include/p101_env/*.pch
-        COMMENT "Removing .gch/.pch files"
-    )
+# Process Libraries (Compile Happens Here)
+if(DEFINED LIBRARY_TARGETS)
+    foreach(LIB ${LIBRARY_TARGETS})
+        add_library(${LIB} SHARED ${${LIB}_SOURCES})
+        target_include_directories(${LIB} PUBLIC "${CMAKE_SOURCE_DIR}/include")
+        target_link_libraries(${LIB} PRIVATE ${${LIB}_LINK_LIBRARIES})
 
-    # Add dependencies including 'analysis' for Clang compiler
-    add_custom_target(strict
-        DEPENDS p101_env analysis lint cppcheck
-        COMMENT "Running code analysis tools"
+        add_dependencies(${LIB} format)
+    endforeach()
+endif()
+
+# Process Executables (Compile Happens Here)
+if(DEFINED EXECUTABLE_TARGETS)
+    foreach(EXE ${EXECUTABLE_TARGETS})
+        add_executable(${EXE} ${${EXE}_SOURCES})
+        target_include_directories(${EXE} PUBLIC "${CMAKE_SOURCE_DIR}/include")
+        target_link_libraries(${EXE} PRIVATE ${${EXE}_LINK_LIBRARIES})
+
+        add_dependencies(${EXE} format)
+    endforeach()
+endif()
+
+# Define Clang-Tidy Check
+add_custom_target(clang-tidy-check
+        COMMAND ${CLANG_TIDY} ${ALL_SOURCE_FILES} ${ALL_HEADER_FILES} -quiet --warnings-as-errors='*' -checks=*,-llvmlibc-restrict-system-libc-headers,-altera-struct-pack-align,-readability-identifier-length,-altera-unroll-loops,-cppcoreguidelines-init-variables,-cert-err33-c,-modernize-macro-to-enum,-bugprone-easily-swappable-parameters,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-altera-id-dependent-backward-branch,-concurrency-mt-unsafe,-misc-unused-parameters,-hicpp-signed-bitwise,-google-readability-todo,-cert-msc30-c,-cert-msc50-cpp,-readability-function-cognitive-complexity,-clang-analyzer-security.insecureAPI.strcpy,-cert-env33-c,-android-cloexec-accept,-clang-analyzer-security.insecureAPI.rand,-misc-include-cleaner,-llvm-header-guard,-cppcoreguidelines-macro-to-enum -- ${CMAKE_C_FLAGS} ${STANDARD_FLAGS} -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include
+        COMMENT "Running clang-tidy on all source files"
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
+# Define Cppcheck Check
+add_custom_target(cppcheck-check
+        COMMAND ${CPPCHECK} --error-exitcode=1 --force --quiet --inline-suppr --library=posix --check-level=exhaustive --enable=all --suppress=missingIncludeSystem --suppress=unusedFunction --suppress=constParameterPointer --suppress=unmatchedSuppression --suppress=checkersReport -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include ${ALL_SOURCE_FILES}
+        COMMENT "Running cppcheck on all source files"
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
+# Run Clang Analyzer explicitly after linting (only if using Clang)
+if (CMAKE_C_COMPILER MATCHES ".*clang.*")
+    add_custom_target(clang-analyze
+            COMMAND ${CMAKE_C_COMPILER} --analyze --analyzer-output text
+            -Xclang -analyzer-checker=core
+            -Xclang -analyzer-checker=security
+            -I${CMAKE_SOURCE_DIR}/include
+            -- ${ALL_SOURCE_FILES}
+            COMMENT "Running Clang Static Analyzer on all files"
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+    add_dependencies(clang-analyze clang-tidy-check cppcheck-check)
+    add_custom_target(check ALL DEPENDS clang-tidy-check cppcheck-check clang-analyze)
 else()
-    # Add dependencies without 'analysis' for other compilers
-    add_custom_target(strict
-        DEPENDS p101_env lint cppcheck
-        COMMENT "Running code analysis tools"
+    add_custom_target(check ALL DEPENDS clang-tidy-check cppcheck-check)
+endif()
+
+if(DEFINED LIBRARY_TARGETS)
+    install(TARGETS ${LIBRARY_TARGETS}
+            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     )
 endif()
 
-add_dependencies(p101_env format)
+if(DEFINED EXECUTABLE_TARGETS)
+    install(TARGETS ${EXECUTABLE_TARGETS}
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
+endif()
 
-# Set the default target to be 'strict'
-add_custom_target(default_target DEPENDS strict)
-
-# Define the installation directory for libraries
-set(INSTALL_LIB_DIR lib${LIBSUFFIX} CACHE PATH "Installation directory for libraries")
-mark_as_advanced(INSTALL_LIB_DIR)
-
-set_target_properties(p101_env PROPERTIES
-    VERSION ${PROJECT_VERSION}
-    SOVERSION ${PROJECT_VERSION_MAJOR})
-
-# Install the library target
-install(TARGETS p101_env
-    LIBRARY DESTINATION ${INSTALL_LIB_DIR}
-    COMPONENT library
-    NAMELINK_COMPONENT development
-)
-
-# Install header files
-install(FILES ${HEADER_LIST}
-    DESTINATION include/p101_env
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+        FILES_MATCHING PATTERN "*.h"
 )

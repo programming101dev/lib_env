@@ -15,7 +15,7 @@ while getopts ":s" opt; do
   esac
 done
 
-if cmake --install build; then
+if sudo cmake --install build; then
     echo "Installation successful."
 
     # Retrieve the owner of the 'build' directory
