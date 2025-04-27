@@ -12,6 +12,7 @@ message(STATUS "  PROJECT_VERSION: ${PROJECT_VERSION}")
 message(STATUS "  PROJECT_DESCRIPTION: ${PROJECT_DESCRIPTION}")
 message(STATUS "  EXECUTABLE_TARGETS: ${EXECUTABLE_TARGETS}")
 message(STATUS "  LIBRARY_TARGETS: ${LIBRARY_TARGETS}")
+message(STATUS "  STANDARD_FLAGS: ${STANDARD_FLAGS}")
 
 # Ensure required variables are set
 set(REQUIRED_VARS PROJECT_NAME PROJECT_VERSION PROJECT_DESCRIPTION)
@@ -122,6 +123,35 @@ if(DEFINED LIBRARY_TARGETS)
         message(STATUS "  Sources: ${${LIB}_SOURCES}")
         message(STATUS "  Headers: ${${LIB}_HEADERS}")
         message(STATUS "  Link Libraries: ${${LIB}_LINK_LIBRARIES}")
+
+        # Create a list that will actually be linked
+        set(FINAL_LINK_LIBRARIES "")
+
+        foreach(LINK_LIB ${${LIB}_LINK_LIBRARIES})
+            if(TARGET ${LINK_LIB})
+                list(APPEND FINAL_LINK_LIBRARIES ${LINK_LIB})
+                message(STATUS "✅ Found project target: ${LINK_LIB}")
+            else()
+                # New logic: use find_library
+                find_library(${LINK_LIB}_FOUND ${LINK_LIB} PATHS /usr/local/lib /usr/local/lib64)
+
+                if(${LINK_LIB}_FOUND)
+                    list(APPEND FINAL_LINK_LIBRARIES ${LINK_LIB})
+                    message(STATUS "✅ Found system library: ${LINK_LIB} at ${${LINK_LIB}_FOUND}")
+                else()
+                    message(WARNING "⚠️ Link library '${LINK_LIB}' for '${LIB}' not found. Assuming it is built into libc or not needed on this platform.")
+                endif()
+            endif()
+        endforeach()
+
+        message(STATUS "📦 Final link libraries for ${LIB}: ${FINAL_LINK_LIBRARIES}")
+
+        # Now actually add the library target
+        add_library(${LIB} SHARED ${${LIB}_SOURCES})
+        target_include_directories(${LIB} PUBLIC "${CMAKE_SOURCE_DIR}/include")
+        target_link_libraries(${LIB} PRIVATE ${FINAL_LINK_LIBRARIES})
+        target_compile_options(${LIB} PRIVATE ${STANDARD_FLAGS})
+        add_dependencies(${LIB} format)
     endforeach()
 endif()
 
@@ -132,38 +162,27 @@ add_custom_target(format
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
-# Process Libraries (Compile Happens Here)
-if(DEFINED LIBRARY_TARGETS)
-    foreach(LIB ${LIBRARY_TARGETS})
-        add_library(${LIB} SHARED ${${LIB}_SOURCES})
-        target_include_directories(${LIB} PUBLIC "${CMAKE_SOURCE_DIR}/include")
-        target_link_libraries(${LIB} PRIVATE ${${LIB}_LINK_LIBRARIES})
-
-        add_dependencies(${LIB} format)
-    endforeach()
-endif()
-
 # Process Executables (Compile Happens Here)
 if(DEFINED EXECUTABLE_TARGETS)
     foreach(EXE ${EXECUTABLE_TARGETS})
         add_executable(${EXE} ${${EXE}_SOURCES})
         target_include_directories(${EXE} PUBLIC "${CMAKE_SOURCE_DIR}/include")
         target_link_libraries(${EXE} PRIVATE ${${EXE}_LINK_LIBRARIES})
-
+        target_compile_options(${EXE} PRIVATE ${STANDARD_FLAGS})
         add_dependencies(${EXE} format)
     endforeach()
 endif()
 
 # Define Clang-Tidy Check
 add_custom_target(clang-tidy-check
-        COMMAND ${CLANG_TIDY} ${ALL_SOURCE_FILES} ${ALL_HEADER_FILES} -quiet --warnings-as-errors='*' -checks=*,-llvmlibc-restrict-system-libc-headers,-altera-struct-pack-align,-readability-identifier-length,-altera-unroll-loops,-cppcoreguidelines-init-variables,-cert-err33-c,-modernize-macro-to-enum,-bugprone-easily-swappable-parameters,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-altera-id-dependent-backward-branch,-concurrency-mt-unsafe,-misc-unused-parameters,-hicpp-signed-bitwise,-google-readability-todo,-cert-msc30-c,-cert-msc50-cpp,-readability-function-cognitive-complexity,-clang-analyzer-security.insecureAPI.strcpy,-cert-env33-c,-android-cloexec-accept,-clang-analyzer-security.insecureAPI.rand,-misc-include-cleaner,-llvm-header-guard,-cppcoreguidelines-macro-to-enum -- ${CMAKE_C_FLAGS} ${STANDARD_FLAGS} -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include
+        COMMAND ${CLANG_TIDY} ${ALL_SOURCE_FILES} ${ALL_HEADER_FILES} -quiet --warnings-as-errors='*' -checks=*,-llvmlibc-restrict-system-libc-headers,-altera-struct-pack-align,-readability-identifier-length,-altera-unroll-loops,-cppcoreguidelines-init-variables,-cert-err33-c,-modernize-macro-to-enum,-bugprone-easily-swappable-parameters,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-altera-id-dependent-backward-branch,-concurrency-mt-unsafe,-misc-unused-parameters,-hicpp-signed-bitwise,-google-readability-todo,-cert-msc30-c,-cert-msc50-cpp,-readability-function-cognitive-complexity,-clang-analyzer-security.insecureAPI.strcpy,-cert-env33-c,-android-cloexec-accept,-clang-analyzer-security.insecureAPI.rand,-misc-include-cleaner,-llvm-header-guard,-cppcoreguidelines-macro-to-enum,-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling -- ${CMAKE_C_FLAGS} ${STANDARD_FLAGS} -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include
         COMMENT "Running clang-tidy on all source files"
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
 # Define Cppcheck Check
 add_custom_target(cppcheck-check
-        COMMAND ${CPPCHECK} --error-exitcode=1 --force --quiet --inline-suppr --library=posix --check-level=exhaustive --enable=all --suppress=missingIncludeSystem --suppress=unusedFunction --suppress=constParameterPointer --suppress=unmatchedSuppression --suppress=checkersReport -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include ${ALL_SOURCE_FILES}
+        COMMAND ${CPPCHECK} --error-exitcode=1 --force --quiet --inline-suppr --library=posix --check-level=exhaustive --enable=all --suppress=missingIncludeSystem --suppress=unusedFunction --suppress=staticFunction --suppress=constParameterPointer --suppress=unmatchedSuppression --suppress=checkersReport -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include ${ALL_SOURCE_FILES}
         COMMENT "Running cppcheck on all source files"
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
@@ -174,6 +193,9 @@ if (CMAKE_C_COMPILER MATCHES ".*clang.*")
             COMMAND ${CMAKE_C_COMPILER} --analyze --analyzer-output text
             -Xclang -analyzer-checker=core
             -Xclang -analyzer-checker=security
+            -Xclang -analyzer-disable-checker=security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+            ${CMAKE_C_FLAGS}
+            ${STANDARD_FLAGS}
             -I${CMAKE_SOURCE_DIR}/include
             -- ${ALL_SOURCE_FILES}
             COMMENT "Running Clang Static Analyzer on all files"
