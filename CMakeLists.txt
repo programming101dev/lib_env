@@ -13,6 +13,7 @@ message(STATUS "  PROJECT_DESCRIPTION: ${PROJECT_DESCRIPTION}")
 message(STATUS "  EXECUTABLE_TARGETS: ${EXECUTABLE_TARGETS}")
 message(STATUS "  LIBRARY_TARGETS: ${LIBRARY_TARGETS}")
 message(STATUS "  STANDARD_FLAGS: ${STANDARD_FLAGS}")
+message(STATUS "  SANITIZER_LIST: ${SANITIZER_LIST}")
 
 # Ensure required variables are set
 set(REQUIRED_VARS PROJECT_NAME PROJECT_VERSION PROJECT_DESCRIPTION)
@@ -22,17 +23,12 @@ foreach(VAR ${REQUIRED_VARS})
     endif()
 endforeach()
 
-# Print loaded project information
-message(STATUS "Project Name: ${PROJECT_NAME}")
-message(STATUS "Project Version: ${PROJECT_VERSION}")
-message(STATUS "Project Description: ${PROJECT_DESCRIPTION}")
-
 # Ensure at least one of EXECUTABLE_TARGETS or LIBRARY_TARGETS is defined
 if(NOT (DEFINED EXECUTABLE_TARGETS OR DEFINED LIBRARY_TARGETS))
     message(FATAL_ERROR "At least one of EXECUTABLE_TARGETS or LIBRARY_TARGETS must be defined.")
 endif()
 
-project(${PROJECT_NAME} VERSION ${PROJECT_VERSION} DESCRIPTION ${PROJECT_DESCRIPTION} LANGUAGES ${PROJECT_LANGUAGE})
+project(${PROJECT_NAME} VERSION ${PROJECT_VERSION} DESCRIPTION "${PROJECT_DESCRIPTION}" LANGUAGES ${PROJECT_LANGUAGE})
 
 include(GNUInstallDirs)
 include_directories(/usr/local/include)
@@ -40,8 +36,6 @@ link_directories(/usr/local/lib /usr/local/lib64)
 
 # Print compiler information
 message(STATUS "Using Compiler: ${CMAKE_C_COMPILER}")
-
-# Extract the compiler name from the full path
 get_filename_component(COMPILER_NAME "${CMAKE_C_COMPILER}" NAME)
 message(STATUS "Compiler Name: ${COMPILER_NAME}")
 
@@ -59,12 +53,11 @@ macro(MAKE_ABSOLUTE_PATHS VAR_NAME)
     message(STATUS "Processed paths for ${VAR_NAME}: ${${VAR_NAME}}")
 endmacro()
 
-# Find required tools dynamically
+# Find required tools
 find_program(CLANG_FORMAT NAMES ${CLANG_FORMAT_NAME})
 find_program(CLANG_TIDY NAMES ${CLANG_TIDY_NAME})
 find_program(CPPCHECK NAMES ${CPPCHECK_NAME})
 
-# Print tool paths
 message(STATUS "Found clang-format: ${CLANG_FORMAT}")
 message(STATUS "Found clang-tidy: ${CLANG_TIDY}")
 message(STATUS "Found cppcheck: ${CPPCHECK}")
@@ -73,24 +66,49 @@ if(NOT CLANG_FORMAT OR NOT CLANG_TIDY OR NOT CPPCHECK)
     message(FATAL_ERROR "Required tools (clang-format, clang-tidy, cppcheck) not found.")
 endif()
 
-# Process sanitizers from `SANITIZER_LIST`
-set(SANITIZER_FLAGS "")
-if(DEFINED SANITIZER_LIST AND NOT "${SANITIZER_LIST}" STREQUAL "")
-    string(REPLACE "," ";" SANITIZER_NAMES "${SANITIZER_LIST}")
-    message(STATUS "Sanitizers enabled: ${SANITIZER_NAMES}")
+# Function to load sanitizer flags
+function(load_sanitizer_flags OUTPUT_VAR)
+    if(NOT DEFINED SANITIZER_LIST OR "${SANITIZER_LIST}" STREQUAL "")
+        set(${OUTPUT_VAR} "" PARENT_SCOPE)
+        return()
+    endif()
 
+    set(SANITIZERS "")
+    string(REPLACE "," ";" SANITIZER_NAMES "${SANITIZER_LIST}")
     foreach(SAN ${SANITIZER_NAMES})
         set(FLAG_FILE "${CMAKE_SOURCE_DIR}/.flags/${COMPILER_NAME}/${SAN}_sanitizer_flags.txt")
         if(EXISTS "${FLAG_FILE}")
-            file(STRINGS "${FLAG_FILE}" SANITIZER_FLAGS_CONTENTS)
-            list(APPEND SANITIZER_FLAGS ${SANITIZER_FLAGS_CONTENTS})
+            file(STRINGS "${FLAG_FILE}" RAW_LINES)
+            foreach(RAW_LINE ${RAW_LINES})
+                string(REPLACE " " ";" TOKENS "${RAW_LINE}")
+                foreach(TOKEN ${TOKENS})
+                    # Only process if it starts with -fsanitize=
+                    if(TOKEN MATCHES "^-fsanitize=")
+                        string(REPLACE "-fsanitize=" "" CLEANED "${TOKEN}")
+                        string(REPLACE "," ";" INDIVIDUAL_SANITIZERS "${CLEANED}")
+                        foreach(SINGLE_SANITIZER ${INDIVIDUAL_SANITIZERS})
+                            list(APPEND SANITIZERS "${SINGLE_SANITIZER}")
+                        endforeach()
+                    endif()
+                endforeach()
+            endforeach()
         else()
             message(WARNING "⚠️ Sanitizer '${SAN}' requested but no flag file found: ${FLAG_FILE}")
         endif()
     endforeach()
+
+    list(REMOVE_DUPLICATES SANITIZERS)
+    list(JOIN SANITIZERS "," SANITIZER_STRING)
+    set(${OUTPUT_VAR} "-fsanitize=${SANITIZER_STRING}" PARENT_SCOPE)
+endfunction()
+
+# Load sanitizer flags
+load_sanitizer_flags(SANITIZER_FLAGS)
+
+if(SANITIZER_FLAGS)
+    message(STATUS "  SANITIZER_FLAGS: ${SANITIZER_FLAGS}")
 endif()
 
-# Ensure `ALL_SOURCE_FILES` is set before formatting
 set(ALL_SOURCE_FILES "")
 set(ALL_HEADER_FILES "")
 
@@ -103,10 +121,18 @@ if(DEFINED EXECUTABLE_TARGETS)
         list(APPEND ALL_SOURCE_FILES ${${EXE}_SOURCES})
         list(APPEND ALL_HEADER_FILES ${${EXE}_HEADERS})
 
-        message(STATUS "Executable ${EXE}:")
-        message(STATUS "  Sources: ${${EXE}_SOURCES}")
-        message(STATUS "  Headers: ${${EXE}_HEADERS}")
-        message(STATUS "  Link Libraries: ${${EXE}_LINK_LIBRARIES}")
+        message(STATUS "Executable ${EXE}: Sources: ${${EXE}_SOURCES}, Headers: ${${EXE}_HEADERS}")
+
+        add_executable(${EXE})
+        target_sources(${EXE} PRIVATE ${${EXE}_SOURCES})
+        target_include_directories(${EXE} PUBLIC
+                $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+                $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+        )
+        target_compile_options(${EXE} PRIVATE ${STANDARD_FLAGS} ${SANITIZER_FLAGS})
+        target_link_options(${EXE} PRIVATE ${SANITIZER_FLAGS})
+        target_link_libraries(${EXE} PRIVATE ${${EXE}_LINK_LIBRARIES})
+        add_dependencies(${EXE} format)
     endforeach()
 endif()
 
@@ -119,12 +145,8 @@ if(DEFINED LIBRARY_TARGETS)
         list(APPEND ALL_SOURCE_FILES ${${LIB}_SOURCES})
         list(APPEND ALL_HEADER_FILES ${${LIB}_HEADERS})
 
-        message(STATUS "Library ${LIB}:")
-        message(STATUS "  Sources: ${${LIB}_SOURCES}")
-        message(STATUS "  Headers: ${${LIB}_HEADERS}")
-        message(STATUS "  Link Libraries: ${${LIB}_LINK_LIBRARIES}")
+        message(STATUS "Library ${LIB}: Sources: ${${LIB}_SOURCES}, Headers: ${${LIB}_HEADERS}")
 
-        # Create a list that will actually be linked
         set(FINAL_LINK_LIBRARIES "")
 
         foreach(LINK_LIB ${${LIB}_LINK_LIBRARIES})
@@ -133,12 +155,10 @@ if(DEFINED LIBRARY_TARGETS)
                 list(APPEND FINAL_LINK_LIBRARIES ${LINK_LIB})
             else()
                 set(_FIND_VAR "${LINK_LIB}_FOUND")
-                find_library(${_FIND_VAR} NAMES ${LINK_LIB}
-                        PATHS /usr/local/lib /usr/local/lib64 /opt/homebrew/lib
-                )
+                find_library(${_FIND_VAR} NAMES ${LINK_LIB} PATHS /usr/local/lib /usr/local/lib64 /opt/homebrew/lib)
 
                 if(NOT "${${_FIND_VAR}}" MATCHES "-NOTFOUND$")
-                    message(STATUS "✅ Found system library: ${LINK_LIB}")
+                    message(STATUS "✅ Found system library: ${LINK_LIB} at ${${_FIND_VAR}}")
                     list(APPEND FINAL_LINK_LIBRARIES ${LINK_LIB})
                 elseif("${LINK_LIB}" STREQUAL "iconv" AND APPLE AND (CMAKE_C_COMPILER_ID MATCHES ".*Clang"))
                     message(STATUS "🟡 Manually linking -liconv on macOS with Clang/AppleClang")
@@ -149,61 +169,53 @@ if(DEFINED LIBRARY_TARGETS)
             endif()
         endforeach()
 
-        message(STATUS "📦 Final link libraries for ${LIB}: ${FINAL_LINK_LIBRARIES}")
-
-        # Now actually add the library target
-        add_library(${LIB} SHARED ${${LIB}_SOURCES})
-        target_include_directories(${LIB} PUBLIC "${CMAKE_SOURCE_DIR}/include")
+        add_library(${LIB} SHARED)
+        target_sources(${LIB} PRIVATE ${${LIB}_SOURCES})
+        target_include_directories(${LIB} PUBLIC
+                $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+                $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+        )
+        target_compile_options(${LIB} PRIVATE ${STANDARD_FLAGS} ${SANITIZER_FLAGS})
+        target_link_options(${LIB} PRIVATE ${SANITIZER_FLAGS})
         target_link_libraries(${LIB} PRIVATE ${FINAL_LINK_LIBRARIES})
-        target_compile_options(${LIB} PRIVATE ${STANDARD_FLAGS})
         add_dependencies(${LIB} format)
     endforeach()
 endif()
 
-# Define Formatting Target (Runs First)
+# Formatting target
 add_custom_target(format
         COMMAND ${CLANG_FORMAT} --style=file -i ${ALL_SOURCE_FILES} ${ALL_HEADER_FILES}
         COMMENT "Running clang-format"
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMAND_EXPAND_LISTS
 )
 
-# Process Executables (Compile Happens Here)
-if(DEFINED EXECUTABLE_TARGETS)
-    foreach(EXE ${EXECUTABLE_TARGETS})
-        add_executable(${EXE} ${${EXE}_SOURCES})
-        target_include_directories(${EXE} PUBLIC "${CMAKE_SOURCE_DIR}/include")
-        target_link_libraries(${EXE} PRIVATE ${${EXE}_LINK_LIBRARIES})
-        target_compile_options(${EXE} PRIVATE ${STANDARD_FLAGS})
-        add_dependencies(${EXE} format)
-    endforeach()
-endif()
-
-# Define Clang-Tidy Check
+# Clang-Tidy Check
 add_custom_target(clang-tidy-check
-        COMMAND ${CLANG_TIDY} ${ALL_SOURCE_FILES} ${ALL_HEADER_FILES} -quiet --warnings-as-errors='*' -checks=*,-llvmlibc-restrict-system-libc-headers,-altera-struct-pack-align,-readability-identifier-length,-altera-unroll-loops,-cppcoreguidelines-init-variables,-cert-err33-c,-modernize-macro-to-enum,-bugprone-easily-swappable-parameters,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-altera-id-dependent-backward-branch,-concurrency-mt-unsafe,-misc-unused-parameters,-hicpp-signed-bitwise,-google-readability-todo,-cert-msc30-c,-cert-msc50-cpp,-readability-function-cognitive-complexity,-clang-analyzer-security.insecureAPI.strcpy,-cert-env33-c,-android-cloexec-accept,-clang-analyzer-security.insecureAPI.rand,-misc-include-cleaner,-llvm-header-guard,-cppcoreguidelines-macro-to-enum,-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling -- ${CMAKE_C_FLAGS} ${STANDARD_FLAGS} -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include
+        COMMAND ${CLANG_TIDY} ${ALL_SOURCE_FILES} ${ALL_HEADER_FILES} -quiet --warnings-as-errors='*' -checks=*,-llvmlibc-restrict-system-libc-headers,-altera-struct-pack-align,-readability-identifier-length,-altera-unroll-loops,-cppcoreguidelines-init-variables,-cert-err33-c,-modernize-macro-to-enum,-bugprone-easily-swappable-parameters,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-altera-id-dependent-backward-branch,-concurrency-mt-unsafe,-misc-unused-parameters,-hicpp-signed-bitwise,-google-readability-todo,-cert-msc30-c,-cert-msc50-cpp,-readability-function-cognitive-complexity,-clang-analyzer-security.insecureAPI.strcpy,-cert-env33-c,-android-cloexec-accept,-clang-analyzer-security.insecureAPI.rand,-misc-include-cleaner,-llvm-header-guard,-cppcoreguidelines-macro-to-enum,-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-llvmlibc-implementation-in-namespace,-llvmlibc-callee-namespace -- ${CMAKE_C_FLAGS} ${STANDARD_FLAGS} -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include
         COMMENT "Running clang-tidy on all source files"
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMAND_EXPAND_LISTS
 )
 
-# Define Cppcheck Check
+# Cppcheck Check
 add_custom_target(cppcheck-check
         COMMAND ${CPPCHECK} --error-exitcode=1 --force --quiet --inline-suppr --library=posix --check-level=exhaustive --enable=all --suppress=missingIncludeSystem --suppress=unusedFunction --suppress=staticFunction --suppress=constParameterPointer --suppress=unmatchedSuppression --suppress=checkersReport -I${CMAKE_SOURCE_DIR}/include -I/usr/local/include ${ALL_SOURCE_FILES}
         COMMENT "Running cppcheck on all source files"
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMAND_EXPAND_LISTS
 )
 
-# Run Clang Analyzer explicitly after linting (only if using Clang)
-if (CMAKE_C_COMPILER MATCHES ".*clang.*")
+# Run analyzer explicitly if using Clang
+if(CMAKE_C_COMPILER MATCHES ".*clang.*")
     add_custom_target(clang-analyze
             COMMAND ${CMAKE_C_COMPILER} --analyze --analyzer-output text
             -Xclang -analyzer-checker=core
             -Xclang -analyzer-checker=security
             -Xclang -analyzer-disable-checker=security.insecureAPI.DeprecatedOrUnsafeBufferHandling
-            ${CMAKE_C_FLAGS}
-            ${STANDARD_FLAGS}
             -I${CMAKE_SOURCE_DIR}/include
             -- ${ALL_SOURCE_FILES}
-            COMMENT "Running Clang Static Analyzer on all files"
+            COMMENT "Running Clang Static Analyzer"
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
     add_dependencies(clang-analyze clang-tidy-check cppcheck-check)
@@ -212,8 +224,10 @@ else()
     add_custom_target(check ALL DEPENDS clang-tidy-check cppcheck-check)
 endif()
 
+# Install targets
 if(DEFINED LIBRARY_TARGETS)
     install(TARGETS ${LIBRARY_TARGETS}
+            EXPORT ${PROJECT_NAME}Targets
             LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
             ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
             RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
@@ -222,6 +236,7 @@ endif()
 
 if(DEFINED EXECUTABLE_TARGETS)
     install(TARGETS ${EXECUTABLE_TARGETS}
+            EXPORT ${PROJECT_NAME}Targets
             RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     )
 endif()
@@ -229,4 +244,10 @@ endif()
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
         FILES_MATCHING PATTERN "*.h"
+)
+
+install(EXPORT ${PROJECT_NAME}Targets
+        FILE ${PROJECT_NAME}Targets.cmake
+        NAMESPACE ${PROJECT_NAME}::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}
 )
