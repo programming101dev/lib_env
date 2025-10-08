@@ -26,7 +26,7 @@ if sudo cmake --install build; then
     fi
 
     # Change the ownership of install_manifest.txt to match 'build' directory owner
-    chown "$build_owner" build/install_manifest.txt
+    sudo chown "$build_owner" build/install_manifest.txt
 
     if [ "$skip_cache_update" = false ]; then
         # Check if the command 'ldconfig' exists on the system
