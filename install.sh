@@ -2,7 +2,10 @@
 # install.sh — cmake --install with a few niceties
 set -euo pipefail
 
-build_dir="build"
+# ----------------- defaults -----------------
+build_dir=""                 # empty means auto
+last_build_file=".last-build-dir"
+
 destdir=""
 prefix=""
 skip_cache_update=false
@@ -12,7 +15,7 @@ verbose=false
 usage() {
   cat <<USAGE
 Usage: $0 [-b <build>] [-D <DESTDIR>] [-p <prefix>] [-S] [-n] [-v]
-  -b <build>    Build directory to install from (default: build)
+  -b <build>    Build directory to install from (default: .last-build-dir if present, else build)
   -D <DESTDIR>  Set DESTDIR for staged installs (e.g., packaging)
   -p <prefix>   Override CMAKE_INSTALL_PREFIX at install time
   -S            Skip cache updates (ldconfig / update_dyld_shared_cache)
@@ -39,7 +42,23 @@ while getopts ":b:D:p:Snvh" opt; do
   esac
 done
 
-# --- sanity checks ---
+# ----------------- pick build dir -----------------
+# Priority:
+#  1) -b <dir>
+#  2) .last-build-dir (as written by change-compiler.sh)
+#  3) "build"
+if [[ -z "${build_dir}" ]]; then
+  if [[ -f "$last_build_file" ]]; then
+    # Read first non-empty line (avoid trailing whitespace issues).
+    build_dir_candidate="$(awk 'NF{print; exit}' "$last_build_file" 2>/dev/null || true)"
+    if [[ -n "${build_dir_candidate:-}" ]]; then
+      build_dir="$build_dir_candidate"
+    fi
+  fi
+fi
+build_dir="${build_dir:-build}"
+
+# ----------------- sanity checks -----------------
 [[ -d "$build_dir" ]] || { echo "Error: build dir '$build_dir' not found." >&2; exit 2; }
 
 # Compose cmake --install command
@@ -47,6 +66,20 @@ cmake_cmd=(cmake --install "$build_dir")
 [[ -n "$destdir" ]] && cmake_cmd+=(--component default) # keep component explicit if you use them
 [[ -n "$destdir" ]] && export DESTDIR="$destdir"
 [[ -n "$prefix"  ]] && cmake_cmd+=(--prefix "$prefix")
+
+# Helper: decide if we likely need sudo for a real (non-DESTDIR) install
+# Checks writability of prefix dir if it exists; otherwise checks parent dir.
+needs_sudo_for_prefix() {
+  local p="${1:-/usr/local}"
+  if [[ -d "$p" ]]; then
+    [[ -w "$p" ]] || return 0
+    return 1
+  fi
+  local parent
+  parent="$(dirname "$p")"
+  [[ -w "$parent" ]] || return 0
+  return 1
+}
 
 if $verbose; then
   echo "Build dir        : $build_dir"
@@ -65,7 +98,7 @@ run() {
   fi
 }
 
-# --- install ---
+# ----------------- install -----------------
 if $dry_run; then
   run "${cmake_cmd[*]}"
 else
@@ -74,18 +107,18 @@ else
     # staged install likely user-writable → try without sudo
     "${cmake_cmd[@]}"
   else
-    if [[ -w "${prefix:-/usr/local}" ]]; then
-      "${cmake_cmd[@]}"
-    else
-      # fall back to sudo if target is likely root-owned
+    install_prefix="${prefix:-/usr/local}"
+    if needs_sudo_for_prefix "$install_prefix"; then
       sudo "${cmake_cmd[@]}"
+    else
+      "${cmake_cmd[@]}"
     fi
   fi
 fi
 
 echo "Installation finished."
 
-# --- post: chown install manifest to match build dir owner (for convenience) ---
+# ----------------- post: chown install manifest to match build dir owner (for convenience) -----------------
 manifest="$build_dir/install_manifest.txt"
 if [[ -f "$manifest" ]]; then
   # Determine owner of build dir
@@ -109,7 +142,7 @@ if [[ -f "$manifest" ]]; then
   fi
 fi
 
-# --- optional: refresh loader caches ---
+# ----------------- optional: refresh loader caches -----------------
 if ! $skip_cache_update && [[ -z "$destdir" ]]; then
   # Only makes sense for real installs (not staged DESTDIR)
   if [[ "$(uname -s)" == "Darwin" ]]; then
@@ -123,7 +156,7 @@ if ! $skip_cache_update && [[ -z "$destdir" ]]; then
   fi
 fi
 
-# --- tips (non-fatal) ---
+# ----------------- tips (non-fatal) -----------------
 if [[ "$(uname -s)" != "Darwin" && -z "$destdir" ]]; then
   # Gentle reminder about RPATH, only in real installs
   if $verbose; then
