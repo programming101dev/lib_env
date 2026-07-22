@@ -2,6 +2,26 @@
 # change-compiler.sh — configure a C project with a chosen compiler & tools
 set -euo pipefail
 
+# --- opt-in coverage / profiling (P101) ---------------------------------
+# Pull the long flags out before the normal option parser and export them.
+# The shared CMakeLists reads P101_COVERAGE / P101_PROFILE at configure time
+# and instruments the compile + link. Absent => nothing changes. If a parent
+# (e.g. update.sh / build-all.sh) already exported them, they are inherited.
+_p101_argv=()
+for _p101_a in "$@"; do
+  case "$_p101_a" in
+    --coverage) export P101_COVERAGE=1 ;;
+    --profile)  export P101_PROFILE=1 ;;
+    *)          _p101_argv+=("$_p101_a") ;;
+  esac
+done
+if ((${#_p101_argv[@]})); then set -- "${_p101_argv[@]}"; else set --; fi
+unset _p101_argv _p101_a
+# QoL: a bare first argument is taken as the C compiler, i.e.
+#   ./change-compiler.sh gcc-16   ==   ./change-compiler.sh -c gcc-16
+if [[ "${1-}" != "" && "${1-}" != -* ]]; then set -- -c "$@"; fi
+# ------------------------------------------------------------------------
+
 # ----------------- defaults -----------------
 c_compiler=""
 clang_format_name="clang-format"
@@ -37,6 +57,9 @@ Examples:
 USAGE
   exit 1
 }
+
+# --help / -h -> usage, exit 0 (P101 uniform CLI help)
+case " $* " in *" --help "*|*" -h "*) ( usage ) || true; exit 0 ;; esac
 
 # ----------------- args -----------------
 while (( "$#" )); do

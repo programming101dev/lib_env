@@ -39,6 +39,9 @@ USAGE
   exit 1
 }
 
+# --help / -h -> usage, exit 0 (P101 uniform CLI help)
+case " $* " in *" --help "*|*" -h "*) ( usage ) || true; exit 0 ;; esac
+
 # -------- opts --------
 while getopts ":nyvN:p:h" opt; do
   case "$opt" in
@@ -183,7 +186,7 @@ fi
 say "The following paths will be removed (${#EXISTING[@]}):"
 for p in "${EXISTING[@]}"; do
   echo "  $p"
-endone 2>/dev/null || true  # in case of very long lists; harmless
+done 2>/dev/null || true  # in case of very long lists; harmless
 
 if ! confirm "Proceed with removal?"; then
   say "Aborted."

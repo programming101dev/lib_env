@@ -18,6 +18,9 @@ usage()
     exit 1
 }
 
+# --help / -h -> usage, exit 0 (P101 uniform CLI help)
+case " $* " in *" --help "*|*" -h "*) ( usage ) || true; exit 0 ;; esac
+
 # Parse command-line options using getopt
 while getopts ":c:f:t:k:" opt; do
   case $opt in

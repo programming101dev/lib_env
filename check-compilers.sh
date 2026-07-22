@@ -3,6 +3,15 @@
 # Exit the script if any command fails
 set -e
 
+# --help / -h -> description, exit 0 (P101 uniform CLI help)
+case " $* " in
+  *" --help "*|*" -h "*)
+    cat <<'P101_USAGE'
+check-compilers.sh — takes no command-line options; run with no arguments.
+P101_USAGE
+    exit 0 ;;
+esac
+
 # Initialize the list of potential compilers
 c_compilers=("gcc" "clang" "gcc13" "gcc-13" "clang-15" "clang-16" "clang-17" "clang-18" "clang15" "clang16" "clang17" "clang18" "clang-devel")
 

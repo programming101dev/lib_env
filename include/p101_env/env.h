@@ -18,7 +18,6 @@
  */
 
 #include <p101_error/error.h>
-#include <stdbool.h>
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -30,11 +29,10 @@ extern "C"
 
     typedef void (*p101_env_tracer)(const struct p101_env *env, const char *file_name, const char *function_name, size_t line_number);
 
-    struct p101_env *p101_env_create(struct p101_error *err, bool zero_free, p101_env_tracer tracer);
+    struct p101_env *p101_env_create(struct p101_error *err, p101_env_tracer tracer);
     struct p101_env *p101_env_dup(struct p101_error *err, const struct p101_env *env);
-    bool             p101_env_is_zero_free(const struct p101_env *env);
+    void             p101_env_destroy(struct p101_env *env);
     p101_env_tracer  p101_env_get_tracer(const struct p101_env *env);
-    void             p101_env_set_zero_free(struct p101_env *env, bool on);
     void             p101_env_set_tracer(struct p101_env *env, p101_env_tracer tracer);
     void             p101_env_default_tracer(const struct p101_env *env, const char *file_name, const char *function_name, size_t line_number);
     void             p101_env_trace(const struct p101_env *env, const char *file_name, const char *function_name, size_t line_number);
