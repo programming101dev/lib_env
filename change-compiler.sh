@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # change-compiler.sh — configure a C project with a chosen compiler & tools
+# Supports: macOS, modern Linux, modern FreeBSD
 set -euo pipefail
 
 # --- opt-in coverage / profiling (P101) ---------------------------------
@@ -30,30 +31,36 @@ cppcheck_name="cppcheck"
 sanitizers=""
 sanitizers_passed=false
 
-build_dir="build"
-generator=""         # e.g. "Ninja" or "Unix Makefiles"
-reuse_build=false    # -R=reuse build dir instead of wiping it
-extra_cmake_args=()  # additional -Dfoo=bar etc.
+# Build dir behavior:
+# - default is "build-<compiler-basename>" (e.g., build-clang, build-gcc-15)
+# - override with -b <dir>
+build_dir=""          # empty means auto
+generator=""          # e.g. "Ninja" or "Unix Makefiles"
+reuse_build=false     # -R=reuse build dir instead of wiping it
+extra_cmake_args=()   # additional -Dfoo=bar etc.
 
 # ----------------- usage -----------------
 usage() {
   cat <<'USAGE' >&2
-Usage: change-compiler.sh -c <cc> [-f <clang-format>] [-t <clang-tidy>] [-k <cppcheck>] [-s <sanitizers>] [-b <build-dir>] [-G <generator>] [-R] [-- -D...]
-  -c <cc>           C compiler (e.g. gcc, gcc-15, clang)
+Usage: change-compiler.sh -c <cc> [-f <clang-format>] [-t <clang-tidy>] [-k <cppcheck>] [-s <sanitizers>] [-b <build-dir>] [-G <generator>] [-R] [--coverage] [--profile] [-- -D...]
+  -c <cc>           C compiler (e.g. gcc, gcc-15, clang, /usr/bin/clang-18)
   -f <name>         clang-format executable (default: clang-format)
   -t <name>         clang-tidy executable   (default: clang-tidy)
   -k <name>         cppcheck executable     (default: cppcheck)
   -s <list>         comma list of sanitizers (e.g. address,undefined)
                     If omitted, reads sanitizers.txt (if present), else none.
-  -b <dir>          build directory (default: build)
+  --coverage        instrument this build for code coverage (gcov)
+  --profile         instrument this build for profiling (gprof)
+  -b <dir>          build directory (default: build-<compiler>)
   -G <gen>          CMake generator (e.g. Ninja, "Unix Makefiles")
-  -R                reuse existing build dir (do NOT delete ./build)
+  -R                reuse existing build dir (do NOT delete it)
   --                pass remaining args straight to CMake (e.g., -DVAR=ON)
 
 Examples:
   ./change-compiler.sh -c clang
   ./change-compiler.sh -c gcc-15 -s address,undefined -G Ninja
-  ./change-compiler.sh -c clang -- -DP101_STRICT=ON
+  ./change-compiler.sh -c /usr/bin/clang-18
+  ./change-compiler.sh -c clang -b build-debug -- -DP101_STRICT=ON
 USAGE
   exit 1
 }
@@ -81,15 +88,21 @@ done
 # ----------------- validation -----------------
 [[ -n "$c_compiler" ]] || { echo "Error: -c <cc> is required." >&2; usage; }
 
-# Resolve a tool to PATH (name or absolute path is fine)
+# Resolve a tool to an absolute path.
+# - accepts absolute paths
+# - otherwise resolves via PATH
 must_find() {
   local tool="$1"
   if [[ "$tool" = /* ]]; then
     [[ -x "$tool" ]] || { echo "Error: '$tool' not executable" >&2; exit 2; }
     printf '%s\n' "$tool"
-  else
-    command -v "$tool" 2>/dev/null || { echo "Error: '$tool' not found in PATH" >&2; exit 2; }
+    return 0
   fi
+
+  local found=""
+  found="$(command -v "$tool" 2>/dev/null || true)"
+  [[ -n "$found" ]] || { echo "Error: '$tool' not found in PATH" >&2; exit 2; }
+  printf '%s\n' "$found"
 }
 
 CC_PATH="$(must_find "$c_compiler")"
@@ -97,10 +110,21 @@ CLANG_FORMAT_PATH="$(must_find "$clang_format_name")"
 CLANG_TIDY_PATH="$(must_find "$clang_tidy_name")"
 CPPCHECK_PATH="$(must_find "$cppcheck_name")"
 
+# ----------------- derive build dir (default: build-<compiler-basename>) -----------------
+# Use basename of resolved compiler path (portable across macOS/Linux/FreeBSD).
+if [[ -z "${build_dir}" ]]; then
+  cc_base="$(basename "$CC_PATH")"
+  build_dir="build-${cc_base}"
+fi
+
+# Persist chosen build dir for build.sh (and other helpers).
+# Keep it in project root; text file is portable.
+printf '%s\n' "$build_dir" > .last-build-dir
+
 # ----------------- sanitizers -----------------
 if ! $sanitizers_passed; then
   if [[ -f "sanitizers.txt" ]]; then
-    # Strip comments and whitespace
+    # Strip comments and whitespace; portable sed/tr for macOS/BSD/Linux.
     sanitizers="$(sed 's/#.*$//g' sanitizers.txt | tr -d '[:space:]')"
     echo "Sanitizers loaded from sanitizers.txt: ${sanitizers:-<none>}"
   else
@@ -112,10 +136,10 @@ else
 fi
 
 # Friendly tweak for macOS AppleClang/leak (IDE/probe compatibility):
+# (No-op: CMake enforces final compatibility; keep this section to preserve prior behavior.)
 if [[ "$(uname -s)" == "Darwin" ]]; then
   if "$CC_PATH" --version 2>/dev/null | grep -qi "clang"; then
-    # If 'leak' is present, keep it—your CMake already drops it for AppleClang
-    : # (leave as-is; CMake enforces final compatibility)
+    : # leave as-is; CMake enforces final compatibility
   fi
 fi
 
