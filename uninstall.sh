@@ -1,40 +1,28 @@
 #!/usr/bin/env bash
 # uninstall.sh — remove installed headers/libs/pkgconfig/cmake for a lib
+# Auto-detects NAME so you can reuse across repos.
 # Works on macOS, Linux, *BSD. Uses sudo only when required.
 set -euo pipefail
 
-# -------- defaults --------
-NAME="p101_env"
 ASSUME_YES=false
 DRY_RUN=false
 VERBOSE=false
-
-# Capitalized variant for some CMake package dir names (portable for bash 3.2)
-CAP_NAME="$(printf '%s' "$NAME" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')"
-
-# Default prefixes per platform (searched in order)
-OS="$(uname -s)"
-if [[ "$OS" == "Darwin" ]]; then
-  PREFIX_DEFAULTS=("/usr/local" "/opt/homebrew")
-else
-  PREFIX_DEFAULTS=("/usr/local" "/usr")
-fi
-
-# user-defined prefixes (may be empty; must be declared!)
+NAME=""              # will be auto-detected unless -N is provided
+CAP_NAME=""          # capitalized NAME (portable)
 declare -a PREFIXES=()
 
 usage() {
   cat <<USAGE
 Usage: $0 [-n] [-y] [-v] [-N <name>] [-p <prefix> ...]
-  -n            Dry run (show what would be removed, but don't delete)
+  -n            Dry run (show what would be removed, don't delete)
   -y            Assume 'yes' to prompts (non-interactive)
   -v            Verbose
-  -N <name>     Override library/package name (default: ${NAME})
-  -p <prefix>   Add install prefix to search (repeatable). Searched BEFORE defaults.
+  -N <name>     Override library/package name (auto-detect by default)
+  -p <prefix>   Add install prefix to search (repeatable). Checked before defaults.
 Examples:
   $0
   $0 -n -v
-  $0 -N p101_env -p /custom/prefix
+  $0 -N mylib -p /custom/prefix
 USAGE
   exit 1
 }
@@ -42,22 +30,80 @@ USAGE
 # --help / -h -> usage, exit 0 (P101 uniform CLI help)
 case " $* " in *" --help "*|*" -h "*) ( usage ) || true; exit 0 ;; esac
 
-# -------- opts --------
 while getopts ":nyvN:p:h" opt; do
   case "$opt" in
     n) DRY_RUN=true ;;
     y) ASSUME_YES=true ;;
     v) VERBOSE=true ;;
-    N) NAME="$OPTARG"; CAP_NAME="$(printf '%s' "$NAME" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')" ;;
+    N) NAME="$OPTARG" ;;
     p) PREFIXES+=("$OPTARG") ;;
     h|*) usage ;;
   esac
 done
 
-# -------- helpers --------
-log()   { $VERBOSE && printf '[info] %s\n' "$*"; }
-say()   { printf '%s\n' "$*"; }
-err()   { printf '[error] %s\n' "$*" >&2; }
+log() { $VERBOSE && printf '[info] %s\n' "$*"; }
+say() { printf '%s\n' "$*"; }
+err() { printf '[error] %s\n' "$*" >&2; }
+
+# --- portable capitalize first letter (Bash 3.2 safe) ---
+cap1() { awk '{print toupper(substr($0,1,1)) substr($0,2)}' <<<"$1"; }
+
+# --- auto-detect NAME if not provided ---
+detect_name() {
+  # 1) include/<dir> (common pattern like include/p101_error)
+  if [[ -z "${NAME}" && -d "include" ]]; then
+    # pick first subdirectory under include/
+    local d
+    for d in include/*; do
+      [[ -d "$d" ]] || continue
+      NAME="$(basename "$d")"
+      log "Detected NAME from include/: $NAME"
+      break
+    done
+  fi
+
+  # 2) build/install_manifest.txt
+  if [[ -z "${NAME}" && -f "build/install_manifest.txt" ]]; then
+    # try to find include/<name>/ or lib/lib<name>.*
+    local cand
+    cand="$(awk -F'/include/' '/\/include\//{split($2,a,"/"); if(a[1]!="") {print a[1]; exit}}' build/install_manifest.txt || true)"
+    if [[ -n "$cand" ]]; then
+      NAME="$cand"
+      log "Detected NAME from install_manifest (include path): $NAME"
+    else
+      cand="$(awk -F'/lib/lib' '/\/lib\/lib[^/]+\./{sub(/\..*/,"",$2); print $2; exit}' build/install_manifest.txt || true)"
+      if [[ -n "$cand" ]]; then
+        NAME="$cand"
+        log "Detected NAME from install_manifest (lib path): $NAME"
+      fi
+    fi
+  fi
+
+  # 3) CMakeLists.txt: project(<name>)
+  if [[ -z "${NAME}" && -f "CMakeLists.txt" ]]; then
+    local cmname
+    cmname="$(awk 'BEGIN{IGNORECASE=1}
+      /project[[:space:]]*\(/ {
+        s=$0
+        sub(/.*project[[:space:]]*\(/,"",s)
+        sub(/[[:space:]].*/,"",s)
+        sub(/\).*/,"",s)
+        print s; exit
+      }' CMakeLists.txt 2>/dev/null || true)"
+    if [[ -n "$cmname" ]]; then
+      NAME="$cmname"
+      log "Detected NAME from CMakeLists.txt: $NAME"
+    fi
+  fi
+
+  # 4) fallback: repo directory name
+  if [[ -z "${NAME}" ]]; then
+    NAME="$(basename "$PWD")"
+    log "Falling back to repo directory name: $NAME"
+  fi
+
+  CAP_NAME="$(cap1 "$NAME")"
+}
 
 confirm() {
   $ASSUME_YES && return 0
@@ -67,10 +113,8 @@ confirm() {
 }
 
 needs_sudo() {
-  # returns 0 if we should use sudo for the given path (permission check)
   local p="$1"
-  local parent
-  parent="$(dirname "$p")"
+  local parent; parent="$(dirname "$p")"
   [[ -w "$p" || -w "$parent" ]] && return 1 || return 0
 }
 
@@ -79,12 +123,10 @@ do_rm() {
   local recursive=""
   if [[ "${1:-}" == "-r" ]]; then recursive="-r"; shift; fi
   local path="$1"
-
   if $DRY_RUN; then
     say "DRY-RUN: rm $recursive -f -- $path"
     return 0
   fi
-
   if needs_sudo "$path"; then
     log "Using sudo to remove: $path"
     sudo rm $recursive -f -- "$path" || return $?
@@ -94,11 +136,10 @@ do_rm() {
 }
 
 do_rmdir() {
-  # remove empty directory if present (best effort)
   local d="$1"
   [[ -d "$d" ]] || return 0
   if $DRY_RUN; then
-    say "DRY-RUN: rmdir --ignore-fail-on-non-empty -- $d"
+    say "DRY-RUN: rmdir -- $d"
     return 0
   fi
   if needs_sudo "$d"; then
@@ -121,7 +162,17 @@ dedupe_append() {
   done
 }
 
-# Compose search prefixes: user-provided first, then defaults (deduped)
+# --- main flow ---
+detect_name
+say "Package name: $NAME"
+
+OS="$(uname -s)"
+if [[ "$OS" == "Darwin" ]]; then
+  PREFIX_DEFAULTS=("/usr/local" "/opt/homebrew")
+else
+  PREFIX_DEFAULTS=("/usr/local" "/usr")
+fi
+
 declare -a SEARCH_PREFIXES=()
 dedupe_append SEARCH_PREFIXES "${PREFIXES[@]:-}"
 dedupe_append SEARCH_PREFIXES "${PREFIX_DEFAULTS[@]}"
@@ -133,42 +184,32 @@ fi
 
 say "Uninstalling '${NAME}' from prefixes: ${SEARCH_PREFIXES[*]}"
 
-# Build the list of paths to remove
+# Build candidate paths
 declare -a TARGETS=()
-
 for P in "${SEARCH_PREFIXES[@]}"; do
-  # Headers dir
   TARGETS+=("$P/include/${NAME}")
-
-  # Libraries (common dirs)
   for L in "$P/lib" "$P/lib64" "$P/lib/arm64" "$P/lib/aarch64-linux-gnu" "$P/lib/x86_64-linux-gnu"; do
     TARGETS+=("$L/lib${NAME}.a")
     TARGETS+=("$L/lib${NAME}.so")
     TARGETS+=("$L/lib${NAME}.so.0")
-    TARGETS+=("$L/lib${NAME}.so.*")            # versioned symlinks
+    TARGETS+=("$L/lib${NAME}.so.*")
     TARGETS+=("$L/lib${NAME}.dylib")
-    TARGETS+=("$L/lib${NAME}.*.dylib")         # versioned on macOS
-    TARGETS+=("$L/lib${NAME}.la")              # libtool files (if any)
-
-    # CMake config locations
+    TARGETS+=("$L/lib${NAME}.*.dylib")
+    TARGETS+=("$L/lib${NAME}.la")
     TARGETS+=("$L/cmake/${NAME}")
-    TARGETS+=("$L/cmake/${CAP_NAME}")          # capitalized variant (portable)
-
-    # pkg-config
+    TARGETS+=("$L/cmake/$(cap1 "$NAME")")
     TARGETS+=("$L/pkgconfig/${NAME}.pc")
     TARGETS+=("$L/pkgconfig/${NAME}-*.pc")
   done
-
-  # share variants
   TARGETS+=("$P/share/${NAME}")
   TARGETS+=("$P/share/${NAME}/cmake")
   TARGETS+=("$P/share/cmake/${NAME}")
-  TARGETS+=("$P/share/cmake/${CAP_NAME}")
+  TARGETS+=("$P/share/cmake/$(cap1 "$NAME")")
   TARGETS+=("$P/share/pkgconfig/${NAME}.pc")
   TARGETS+=("$P/share/pkgconfig/${NAME}-*.pc")
 done
 
-# Filter to those that actually exist (expand globs safely)
+# Filter to existing matches (expand globs safely)
 declare -a EXISTING=()
 shopt -s nullglob
 for pat in "${TARGETS[@]}"; do
@@ -186,7 +227,7 @@ fi
 say "The following paths will be removed (${#EXISTING[@]}):"
 for p in "${EXISTING[@]}"; do
   echo "  $p"
-done 2>/dev/null || true  # in case of very long lists; harmless
+done
 
 if ! confirm "Proceed with removal?"; then
   say "Aborted."
@@ -204,15 +245,15 @@ for p in "${EXISTING[@]}"; do
   fi
 done
 
-# Attempt to clean up now-empty dirs for neatness (best-effort)
+# Best-effort cleanup of now-empty dirs
 for P in "${SEARCH_PREFIXES[@]}"; do
   do_rmdir "$P/share/pkgconfig"
   do_rmdir "$P/lib/pkgconfig"
   do_rmdir "$P/lib/cmake/${NAME}" || true
-  do_rmdir "$P/lib/cmake/${CAP_NAME}" || true
+  do_rmdir "$P/lib/cmake/$(cap1 "$NAME")" || true
   do_rmdir "$P/lib/cmake" || true
   do_rmdir "$P/share/cmake/${NAME}" || true
-  do_rmdir "$P/share/cmake/${CAP_NAME}" || true
+  do_rmdir "$P/share/cmake/$(cap1 "$NAME")" || true
   do_rmdir "$P/share/cmake" || true
 done
 
