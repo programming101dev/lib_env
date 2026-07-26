@@ -16,11 +16,13 @@
 
 #include "p101_env/env.h"
 #include <errno.h>
+#include <fcntl.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <unistd.h>
 
 /* One tracked descriptor, with the site that opened it. */
@@ -80,6 +82,7 @@ enum
     P101_POINTER_BUF_LEN     = 64,
     P101_ASCII_DELETE        = 0x7F,
     P101_ENV_NUMBER_BASE     = 10,
+    P101_EXEC_SCAN_FD_MAX    = 65536,
     P101_DEFAULT_FAULT_ERRNO = EIO
 };
 
@@ -99,6 +102,8 @@ static int           p101_env_flag_on(const char *name, int default_value);
 static void          p101_env_fd_notify(const struct p101_env *env, p101_env_fd_event event, int fd, const char *file_name, const char *function_name, int line_number);
 static void          p101_env_fd_log_observer(const struct p101_env *env, p101_env_fd_event event, int fd, const char *file_name, const char *function_name, int line_number, void *user_data);
 static void          p101_env_fork_log(FILE *stream, long parent_pid, long child_pid, const char *file_name, const char *function_name, int line_number);
+static long          p101_env_exec_scan_limit(void);
+static void          p101_env_exec_fd_log(FILE *stream, int fd, int cloexec, const char *target, const char *file_name, const char *function_name, int line_number);
 static void          p101_env_alloc_notify(const struct p101_env *env, p101_env_alloc_event event, const void *ptr, const void *new_ptr, size_t size, const char *file_name, const char *function_name, int line_number);
 static void          p101_env_alloc_log_observer(const struct p101_env *env, p101_env_alloc_event event, const void *ptr, const void *new_ptr, size_t size, const char *file_name, const char *function_name, int line_number, void *user_data);
 static const char   *p101_env_alloc_event_name(p101_env_alloc_event event);
@@ -1022,6 +1027,70 @@ static void p101_env_fork_log(FILE *stream, long parent_pid, long child_pid, con
     fflush(stream);                     // NOLINT(cert-err33-c)
 }
 
+static long p101_env_exec_scan_limit(void)
+{
+    long          limit;
+    struct rlimit rl;
+
+    limit = P101_EXEC_SCAN_FD_MAX;
+
+    if(getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY && rl.rlim_cur < P101_EXEC_SCAN_FD_MAX)
+    {
+        limit = (long)rl.rlim_cur;
+    }
+    else
+    {
+        long open_max;
+
+        open_max = sysconf(_SC_OPEN_MAX);
+
+        if(open_max > 0 && open_max < limit)
+        {
+            limit = open_max;
+        }
+    }
+
+    return limit;
+}
+
+static void p101_env_exec_fd_log(FILE *stream, int fd, int cloexec, const char *target, const char *file_name, const char *function_name, int line_number)
+{
+    char   line[P101_ALLOC_LOG_LINE_MAX];
+    char   number[P101_NUMBER_BUF_LEN];
+    size_t offset;
+
+    if(stream == NULL)
+    {
+        return;
+    }
+
+    offset  = 0;
+    line[0] = '\0';
+
+    p101_env_log_append_text(line, sizeof(line), &offset, "P101EXEC\t1\t");
+    snprintf(number, sizeof(number), "%" PRIdMAX, (intmax_t)getpid());    // NOLINT(cert-err33-c)
+    p101_env_log_append_text(line, sizeof(line), &offset, number);
+    p101_env_log_append_char(line, sizeof(line), &offset, '\t');
+    snprintf(number, sizeof(number), "%d", fd);    // NOLINT(cert-err33-c)
+    p101_env_log_append_text(line, sizeof(line), &offset, number);
+    p101_env_log_append_char(line, sizeof(line), &offset, '\t');
+    snprintf(number, sizeof(number), "%d", cloexec);    // NOLINT(cert-err33-c)
+    p101_env_log_append_text(line, sizeof(line), &offset, number);
+    p101_env_log_append_char(line, sizeof(line), &offset, '\t');
+    snprintf(number, sizeof(number), "%d", line_number);    // NOLINT(cert-err33-c)
+    p101_env_log_append_text(line, sizeof(line), &offset, number);
+    p101_env_log_append_char(line, sizeof(line), &offset, '\t');
+    p101_env_log_append_field(line, sizeof(line), &offset, function_name);
+    p101_env_log_append_char(line, sizeof(line), &offset, '\t');
+    p101_env_log_append_field(line, sizeof(line), &offset, file_name);
+    p101_env_log_append_char(line, sizeof(line), &offset, '\t');
+    p101_env_log_append_field(line, sizeof(line), &offset, target);
+    p101_env_log_append_char(line, sizeof(line), &offset, '\n');
+
+    fwrite(line, 1, offset, stream);    // NOLINT(cert-err33-c)
+    fflush(stream);                     // NOLINT(cert-err33-c)
+}
+
 static void p101_env_alloc_log_observer(const struct p101_env *env, p101_env_alloc_event event, const void *ptr, const void *new_ptr, size_t size, const char *file_name, const char *function_name, int line_number, void *user_data)
 {
     FILE  *stream;
@@ -1390,6 +1459,43 @@ void p101_env_track_fork(const struct p101_env *env, long parent_pid, long child
 
     stream = (FILE *)env->fd_observer_data;
     p101_env_fork_log(stream, parent_pid, child_pid, file_name, function_name, line_number);
+}
+
+void p101_env_track_exec(const struct p101_env *env, const char *target, const char *file_name, const char *function_name, int line_number)
+{
+    FILE *stream;
+    long  limit;
+
+    if(env == NULL)
+    {
+        return;
+    }
+
+    /*
+     * Exec is a resource-log concept, not an OPEN/CLOSE observer event. Custom
+     * fd observers keep their simple two-event contract.
+     */
+    if(env->fd_observer != p101_env_fd_log_observer)
+    {
+        return;
+    }
+
+    stream = (FILE *)env->fd_observer_data;
+    limit  = p101_env_exec_scan_limit();
+
+    for(long fd = 0; fd < limit; fd++)
+    {
+        int flags;
+
+        flags = fcntl((int)fd, F_GETFD);
+
+        if(flags == -1)
+        {
+            continue;
+        }
+
+        p101_env_exec_fd_log(stream, (int)fd, ((flags & FD_CLOEXEC) == FD_CLOEXEC) ? 1 : 0, target, file_name, function_name, line_number);
+    }
 }
 
 size_t p101_env_report_leaks(const struct p101_env *env)
