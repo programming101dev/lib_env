@@ -193,6 +193,7 @@ extern "C"
      * format the resource-tracker analyzer reads.
      *
      *     P101FD<TAB>1<TAB>pid<TAB>OPEN|CLOSE<TAB>fd<TAB>line<TAB>function<TAB>file
+     *     P101FORK<TAB>1<TAB>parent-pid<TAB>child-pid<TAB>line<TAB>function<TAB>file
      *
      * The P101FD magic means the log can share a stream with ordinary output
      * and still be grepped back out; the 1 is a format version; the free-form
@@ -200,10 +201,13 @@ extern "C"
      * Each line is a single fwrite() followed by a flush, so the log survives a
      * crash and a fork does not split a line in half -- and because the pid is
      * on every line, the analyzer can tell the child's descriptors from the
-     * parent's. Passing NULL removes the sink. The stream is NOT closed by
-     * p101_env_destroy(); the caller owns it.
+     * parent's. The fork record lets an analyzer seed the child's descriptor
+     * table from the descriptors live in the parent at fork time. Passing NULL
+     * removes the sink. The stream is NOT closed by p101_env_destroy(); the
+     * caller owns it.
      */
     void p101_env_set_fd_log(struct p101_env *env, FILE *stream);
+    void p101_env_track_fork(const struct p101_env *env, long parent_pid, long child_pid, const char *file_name, const char *function_name, int line_number);
 
     /*
      * Allocation event observer. Like the fd observer, this is best-effort
@@ -231,6 +235,7 @@ extern "C"
 #define P101_CALL_EXIT(env, call_name, result) p101_env_trace_call_exit((env), (call_name), (result), __FILE__, __func__, __LINE__)
 #define P101_TRACK_OPEN(env, fd) p101_env_track_open((env), (fd), __FILE__, __func__, __LINE__)
 #define P101_TRACK_CLOSE(env, fd) p101_env_track_close((env), (fd), __FILE__, __func__, __LINE__)
+#define P101_TRACK_FORK(env, parent_pid, child_pid) p101_env_track_fork((env), (parent_pid), (child_pid), __FILE__, __func__, __LINE__)
 #define P101_TRACK_ALLOC(env, ptr, size) p101_env_track_alloc((env), (ptr), (size), __FILE__, __func__, __LINE__)
 #define P101_TRACK_FREE(env, ptr) p101_env_track_free((env), (ptr), __FILE__, __func__, __LINE__)
 #define P101_TRACK_REALLOC(env, ptr, new_ptr, size) p101_env_track_realloc((env), (ptr), (new_ptr), (size), __FILE__, __func__, __LINE__)

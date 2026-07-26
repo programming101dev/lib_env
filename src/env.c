@@ -98,6 +98,7 @@ static int           p101_env_parse_int_environment(const char *text, int defaul
 static int           p101_env_flag_on(const char *name, int default_value);
 static void          p101_env_fd_notify(const struct p101_env *env, p101_env_fd_event event, int fd, const char *file_name, const char *function_name, int line_number);
 static void          p101_env_fd_log_observer(const struct p101_env *env, p101_env_fd_event event, int fd, const char *file_name, const char *function_name, int line_number, void *user_data);
+static void          p101_env_fork_log(FILE *stream, long parent_pid, long child_pid, const char *file_name, const char *function_name, int line_number);
 static void          p101_env_alloc_notify(const struct p101_env *env, p101_env_alloc_event event, const void *ptr, const void *new_ptr, size_t size, const char *file_name, const char *function_name, int line_number);
 static void          p101_env_alloc_log_observer(const struct p101_env *env, p101_env_alloc_event event, const void *ptr, const void *new_ptr, size_t size, const char *file_name, const char *function_name, int line_number, void *user_data);
 static const char   *p101_env_alloc_event_name(p101_env_alloc_event event);
@@ -989,6 +990,38 @@ static void p101_env_fd_log_observer(const struct p101_env *env, p101_env_fd_eve
     fflush(stream);                     // NOLINT(cert-err33-c)
 }
 
+static void p101_env_fork_log(FILE *stream, long parent_pid, long child_pid, const char *file_name, const char *function_name, int line_number)
+{
+    char   line[P101_FD_LOG_LINE_MAX];
+    int    written;
+    size_t length;
+
+    if(stream == NULL)
+    {
+        return;
+    }
+
+    written = snprintf(line, sizeof(line), "P101FORK\t1\t%ld\t%ld\t%d\t%s\t%s\n", parent_pid, child_pid, line_number, (function_name == NULL) ? "?" : function_name, (file_name == NULL) ? "?" : file_name);
+
+    if(written < 0)
+    {
+        return;
+    }
+
+    if((size_t)written >= sizeof(line))
+    {
+        length           = sizeof(line) - 1;
+        line[length - 1] = '\n';
+    }
+    else
+    {
+        length = (size_t)written;
+    }
+
+    fwrite(line, 1, length, stream);    // NOLINT(cert-err33-c)
+    fflush(stream);                     // NOLINT(cert-err33-c)
+}
+
 static void p101_env_alloc_log_observer(const struct p101_env *env, p101_env_alloc_event event, const void *ptr, const void *new_ptr, size_t size, const char *file_name, const char *function_name, int line_number, void *user_data)
 {
     FILE  *stream;
@@ -1336,6 +1369,27 @@ void p101_env_track_close(const struct p101_env *env, int fd, const char *file_n
 
         pp = &(*pp)->next;
     }
+}
+
+void p101_env_track_fork(const struct p101_env *env, long parent_pid, long child_pid, const char *file_name, const char *function_name, int line_number)
+{
+    FILE *stream;
+
+    if(env == NULL || parent_pid < 0 || child_pid < 0)
+    {
+        return;
+    }
+
+    /* A fork is not an OPEN or CLOSE, so it is emitted only by the standard
+     * resource-log sink. Custom fd observers keep their simple two-event
+     * contract. */
+    if(env->fd_observer != p101_env_fd_log_observer)
+    {
+        return;
+    }
+
+    stream = (FILE *)env->fd_observer_data;
+    p101_env_fork_log(stream, parent_pid, child_pid, file_name, function_name, line_number);
 }
 
 size_t p101_env_report_leaks(const struct p101_env *env)
