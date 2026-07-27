@@ -133,6 +133,25 @@ extern "C"
 
     p101_env_event_line_status p101_env_read_event_line(struct p101_error *err, FILE *stream, char *line, size_t line_size);
 
+    /*
+     * Event log format version. Version 1 is the stable default. Version 2 adds
+     * per-env sequence and timestamp fields immediately after pid:
+     *
+     *   MAGIC<TAB>2<TAB>pid<TAB>seq<TAB>mono_ns<TAB>wall_unix_ns<TAB>...
+     *
+     * Set P101_EVENT_LOG_VERSION=2 to request v2 through the environment
+     * bridge, or call p101_env_set_event_log_version(). Invalid versions return
+     * EINVAL and leave the previous version unchanged.
+     */
+    typedef enum
+    {
+        P101_ENV_EVENT_LOG_VERSION_1 = 1,
+        P101_ENV_EVENT_LOG_VERSION_2 = 2
+    } p101_env_event_log_version;
+
+    int p101_env_set_event_log_version(struct p101_env *env, int version);
+    int p101_env_get_event_log_version(const struct p101_env *env);
+
     /* A short label for this env (typically a thread name). When set, the
      * default tracer prints it, so interleaved traces from one-env-per-thread
      * programs stay legible. The string is NOT copied; keep it alive. */
