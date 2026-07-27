@@ -113,6 +113,26 @@ extern "C"
     void p101_env_trace_call(const struct p101_env *env, const char *call_name, const char *arguments, const char *file_name, const char *function_name, int line_number);
     void p101_env_trace_call_exit(const struct p101_env *env, const char *call_name, const char *result, const char *file_name, const char *function_name, int line_number);
 
+    /*
+     * Shared event-log input primitive for tools that consume P101FD,
+     * P101ALLOC, P101FORK, P101EXEC, P101CALL, and future p101 event records.
+     *
+     * It reads one physical line from stream into line, always NUL-terminates
+     * when line_size is non-zero, and treats embedded NUL bytes or lines that do
+     * not fit as malformed. The caller still decides whether a malformed line
+     * belongs to its schema; this function only answers whether the bytes are a
+     * trustworthy text record.
+     */
+    typedef enum
+    {
+        P101_ENV_EVENT_LINE_EOF = 0,
+        P101_ENV_EVENT_LINE_OK,
+        P101_ENV_EVENT_LINE_MALFORMED,
+        P101_ENV_EVENT_LINE_ERROR
+    } p101_env_event_line_status;
+
+    p101_env_event_line_status p101_env_read_event_line(struct p101_error *err, FILE *stream, char *line, size_t line_size);
+
     /* A short label for this env (typically a thread name). When set, the
      * default tracer prints it, so interleaved traces from one-env-per-thread
      * programs stay legible. The string is NOT copied; keep it alive. */

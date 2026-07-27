@@ -28,6 +28,12 @@ project(${PROJECT_NAME}
         DESCRIPTION "${PROJECT_DESCRIPTION}"
         LANGUAGES ${PROJECT_LANGUAGE})
 
+# config.cmake is read before project() so it can define PROJECT_NAME and
+# PROJECT_LANGUAGE. Platform and compiler conditionals such as
+# CMAKE_SYSTEM_NAME, APPLE, UNIX, and CMAKE_*_COMPILER_ID are only reliable
+# after project(), so repos may add a config-post.cmake hook for those.
+include("${CMAKE_CURRENT_SOURCE_DIR}/config-post.cmake" OPTIONAL)
+
 # Derive helpers for language/compilers
 if (PROJECT_LANGUAGE STREQUAL "CXX")
     set(_LANG CXX)
@@ -80,6 +86,21 @@ find_program(SCAN_BUILD_NAME NAMES scan-build DOC "scan-build executable used by
 
 # Enforce: cppcheck must exist and will always run
 find_program(CPPCHECK_NAME NAMES cppcheck REQUIRED DOC "cppcheck executable used by the build")
+execute_process(
+        COMMAND "${CPPCHECK_NAME}" --version
+        OUTPUT_VARIABLE _P101_CPPCHECK_VERSION_TEXT
+        ERROR_VARIABLE _P101_CPPCHECK_VERSION_ERROR
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE _P101_CPPCHECK_VERSION_RC)
+if (_P101_CPPCHECK_VERSION_RC EQUAL 0)
+    string(REGEX MATCH "[0-9]+\\.[0-9]+(\\.[0-9]+)?" _P101_CPPCHECK_VERSION "${_P101_CPPCHECK_VERSION_TEXT}")
+    if (_P101_CPPCHECK_VERSION VERSION_LESS "2.14")
+        message(WARNING "cppcheck ${_P101_CPPCHECK_VERSION} is older than the p101 known-good floor 2.14; self-diagnostics will be logged but filtered from the fatal gate.")
+    endif ()
+else ()
+    message(WARNING "Could not determine cppcheck version: ${_P101_CPPCHECK_VERSION_ERROR}")
+endif ()
 
 # Python (required for JSON-safe compile DB sanitizer + analyze-from-DB)
 find_program(PYTHON3_EXECUTABLE NAMES python3 python REQUIRED DOC "Python executable for helper scripts")
@@ -481,6 +502,7 @@ set(_P101_WORKSPACE_ROOT_CANDIDATES
 )
 set(_P101_LOCAL_INCLUDE_DIRS "")
 set(_P101_LOCAL_LINK_DIRS "")
+get_filename_component(_P101_COMPILER_BASENAME "${CMAKE_C_COMPILER}" NAME)
 foreach (_p101_root IN LISTS _P101_WORKSPACE_ROOT_CANDIDATES)
     get_filename_component(_p101_root_abs "${_p101_root}" ABSOLUTE)
     if (IS_DIRECTORY "${_p101_root_abs}/libraries")
@@ -489,6 +511,9 @@ foreach (_p101_root IN LISTS _P101_WORKSPACE_ROOT_CANDIDATES)
         foreach (_p101_library_repo IN LISTS _p101_library_repos)
             if (IS_DIRECTORY "${_p101_library_repo}/include")
                 list(APPEND _P101_LOCAL_INCLUDE_DIRS "${_p101_library_repo}/include")
+            endif ()
+            if (IS_DIRECTORY "${_p101_library_repo}/build-${_P101_COMPILER_BASENAME}")
+                list(APPEND _P101_LOCAL_LINK_DIRS "${_p101_library_repo}/build-${_P101_COMPILER_BASENAME}")
             endif ()
             if (EXISTS "${_p101_library_repo}/.last-build-dir")
                 file(READ "${_p101_library_repo}/.last-build-dir" _p101_last_build_dir)
@@ -522,24 +547,34 @@ set(_LIB_CANDIDATES
         ${P101_PUBLIC_LINK_DIRS_LIST}
         "/usr/local/lib" "/usr/local/lib64"
 )
+set(_INSTALL_LIB_CANDIDATES
+        ${P101_PUBLIC_LINK_DIRS_LIST}
+        "/usr/local/lib" "/usr/local/lib64"
+)
 if (APPLE)
     list(APPEND _INC_CANDIDATES /opt/homebrew/include /opt/local/include)
     list(APPEND _LIB_CANDIDATES /opt/homebrew/lib /opt/local/lib)
+    list(APPEND _INSTALL_LIB_CANDIDATES /opt/homebrew/lib /opt/local/lib)
 endif ()
 list(REMOVE_DUPLICATES _INC_CANDIDATES)
 list(REMOVE_DUPLICATES _LIB_CANDIDATES)
+list(REMOVE_DUPLICATES _INSTALL_LIB_CANDIDATES)
 
 _p101_filter_existing_dirs(P101_PUBLIC_INCLUDE_DIRS_EXISTING ${_INC_CANDIDATES})
 _p101_filter_existing_dirs(P101_PUBLIC_LINK_DIRS_EXISTING ${_LIB_CANDIDATES})
+_p101_filter_existing_dirs(P101_INSTALL_LINK_DIRS_EXISTING ${_INSTALL_LIB_CANDIDATES})
 
 if (P101_PUBLIC_LINK_DIRS_EXISTING)
     set(CMAKE_BUILD_RPATH "${P101_PUBLIC_LINK_DIRS_EXISTING}")
-    set(CMAKE_INSTALL_RPATH "${P101_PUBLIC_LINK_DIRS_EXISTING}")
-    set(CMAKE_INSTALL_RPATH_USE_LINK_PATH ON)
 endif ()
+if (P101_INSTALL_LINK_DIRS_EXISTING)
+    set(CMAKE_INSTALL_RPATH "${P101_INSTALL_LINK_DIRS_EXISTING}")
+endif ()
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH OFF)
 
 message(STATUS "Public include dirs used: ${P101_PUBLIC_INCLUDE_DIRS_EXISTING}")
 message(STATUS "Public link dirs used:    ${P101_PUBLIC_LINK_DIRS_EXISTING}")
+message(STATUS "Install rpath dirs used:  ${P101_INSTALL_LINK_DIRS_EXISTING}")
 
 # --- Classify include dirs into project vs external (system)
 set(P101_PROJECT_INC_DIR "")
@@ -547,10 +582,19 @@ if (IS_DIRECTORY "${PUBLIC_INC_DIR}")
     set(P101_PROJECT_INC_DIR "${PUBLIC_INC_DIR}")
 endif ()
 
+set(_LOCAL_INC_DIRS ${_P101_LOCAL_INCLUDE_DIRS})
+if (P101_PROJECT_INC_DIR)
+    list(REMOVE_ITEM _LOCAL_INC_DIRS "${P101_PROJECT_INC_DIR}")
+endif ()
+list(REMOVE_DUPLICATES _LOCAL_INC_DIRS)
+
 set(_EXT_INC_DIRS "${P101_PUBLIC_INCLUDE_DIRS_EXISTING}")
 if (P101_PROJECT_INC_DIR)
     list(REMOVE_ITEM _EXT_INC_DIRS "${P101_PROJECT_INC_DIR}")
 endif ()
+foreach (_d IN LISTS _LOCAL_INC_DIRS)
+    list(REMOVE_ITEM _EXT_INC_DIRS "${_d}")
+endforeach ()
 list(REMOVE_DUPLICATES _EXT_INC_DIRS)
 
 # Prebuild convenience strings for custom commands (best-effort; used only for echo lines)
@@ -568,6 +612,11 @@ set(_PROJ_I_CMD "")
 if (P101_PROJECT_INC_DIR)
     set(_PROJ_I_CMD "-I\"${P101_PROJECT_INC_DIR}\"")
 endif ()
+set(_LOCAL_I_LIST)
+foreach (_d IN LISTS _LOCAL_INC_DIRS)
+    list(APPEND _LOCAL_I_LIST -I "\"${_d}\"")
+endforeach ()
+string(JOIN " " _LOCAL_I_CMD ${_LOCAL_I_LIST})
 
 # =========================
 # Iconv (portable, **opt-in via "iconv" token in config.cmake**)
@@ -749,6 +798,10 @@ foreach (_lib IN LISTS LIBRARY_TARGETS)
     if (P101_PROJECT_INC_DIR)
         target_include_directories(${_lib} PUBLIC "${P101_PROJECT_INC_DIR}")
     endif ()
+    # Local p101 workspace libraries as normal (-I), before installed prefixes.
+    if (_LOCAL_INC_DIRS)
+        target_include_directories(${_lib} PUBLIC ${_LOCAL_INC_DIRS})
+    endif ()
     # External as SYSTEM (-isystem)
     if (_EXT_INC_DIRS)
         target_include_directories(${_lib} SYSTEM PUBLIC ${_EXT_INC_DIRS})
@@ -789,6 +842,10 @@ foreach (_exe IN LISTS EXECUTABLE_TARGETS)
     # Project includes as normal (-I)
     if (P101_PROJECT_INC_DIR)
         target_include_directories(${_exe} PRIVATE "${P101_PROJECT_INC_DIR}")
+    endif ()
+    # Local p101 workspace libraries as normal (-I), before installed prefixes.
+    if (_LOCAL_INC_DIRS)
+        target_include_directories(${_exe} PRIVATE ${_LOCAL_INC_DIRS})
     endif ()
     # External as SYSTEM (-isystem)
     if (_EXT_INC_DIRS)
@@ -1347,10 +1404,10 @@ if (_COMPILER_ID MATCHES "Clang" AND NOT P101_IS_RASPBERRY_PI)
         add_custom_command(
                 OUTPUT "${_stamp}"
                 COMMAND ${CMAKE_COMMAND} -E echo
-                "${ICON} running: ${_COMPILER} ${_SA_STD} ${_P101_SA_DEFS_CMD} ${_SA_FLAGS_CMD} ${_SA_ARGS_CMD} ${_PROJ_I_CMD} ${_EXT_ISYSTEM_CMD} ${_MAC_SYSROOT_CMD} \"${_abs}\""
+                "${ICON} running: ${_COMPILER} ${_SA_STD} ${_P101_SA_DEFS_CMD} ${_SA_FLAGS_CMD} ${_SA_ARGS_CMD} ${_PROJ_I_CMD} ${_LOCAL_I_CMD} ${_EXT_ISYSTEM_CMD} ${_MAC_SYSROOT_CMD} \"${_abs}\""
                 COMMAND /bin/sh -c
                 "\"${_COMPILER}\" ${_SA_STD} ${_P101_SA_DEFS_CMD} ${_SA_FLAGS_CMD} ${_SA_ARGS_CMD} \
-                   ${_PROJ_I_CMD} ${_EXT_ISYSTEM_CMD} ${_MAC_SYSROOT_CMD} \
+                   ${_PROJ_I_CMD} ${_LOCAL_I_CMD} ${_EXT_ISYSTEM_CMD} ${_MAC_SYSROOT_CMD} \
                    \"${_abs}\" > \"${_out}\" 2>&1 || true"
                 COMMAND ${CMAKE_COMMAND} -E touch "${_stamp}"
                 DEPENDS "${_abs}"

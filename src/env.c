@@ -19,6 +19,7 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -818,6 +819,79 @@ void p101_env_trace_call_exit(const struct p101_env *env, const char *call_name,
     }
 
     p101_env_call_notify(env, P101_ENV_CALL_EXIT, call_name, NULL, result, file_name, function_name, line_number);
+}
+
+p101_env_event_line_status p101_env_read_event_line(struct p101_error *err, FILE *stream, char *line, size_t line_size)
+{
+    bool   saw_byte;
+    bool   malformed;
+    size_t length;
+
+    if(stream == NULL || line == NULL || line_size == 0U)
+    {
+        P101_ERROR_RAISE_CHECK(err);
+
+        return P101_ENV_EVENT_LINE_ERROR;
+    }
+
+    saw_byte  = false;
+    malformed = false;
+    length    = 0U;
+
+    while(true)
+    {
+        int ch;
+
+        ch = fgetc(stream);
+
+        if(ch == EOF)
+        {
+            if(ferror(stream) != 0)
+            {
+                P101_ERROR_RAISE_ERRNO(err, errno == 0 ? EIO : errno);
+
+                return P101_ENV_EVENT_LINE_ERROR;
+            }
+
+            break;
+        }
+
+        saw_byte = true;
+
+        if(ch == '\0')
+        {
+            malformed = true;
+        }
+
+        if(length + 1U < line_size)
+        {
+            line[length] = (char)ch;
+            length++;
+        }
+        else
+        {
+            malformed = true;
+        }
+
+        if(ch == '\n')
+        {
+            break;
+        }
+    }
+
+    if(!saw_byte)
+    {
+        return P101_ENV_EVENT_LINE_EOF;
+    }
+
+    line[length] = '\0';
+
+    if(malformed)
+    {
+        return P101_ENV_EVENT_LINE_MALFORMED;
+    }
+
+    return P101_ENV_EVENT_LINE_OK;
 }
 
 /* cppcheck-suppress funcArgNamesDifferentUnnamed */
