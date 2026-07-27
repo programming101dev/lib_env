@@ -49,12 +49,12 @@ firstline() { "$@" 2>/dev/null | head -1; }
 # output. Portable (BSD/macOS + GNU): no sed 'T', no GNU-only flags.
 ver_num() { "$@" 2>/dev/null | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1; }
 
-# ---- locate shared config lists. In the workspace they live in scripts/; in a
-# standalone clone (copy-template.sh) they are symlinked at the repo root. Search
-# both, per file, so either layout works.
+# ---- locate config lists. In a copied project these are expected at the repo
+# root, usually as symlinks to a shared cache. Do not search parent directories:
+# copied templates must not silently depend on the surrounding checkout layout.
 find_list() {
   local n="$1" c
-  for c in "." "scripts" "../scripts" "../../scripts" "./cmake/../scripts"; do
+  for c in "." "scripts"; do
     if [ -f "$c/$n" ]; then echo "$c/$n"; return 0; fi
   done
 }

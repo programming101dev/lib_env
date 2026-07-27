@@ -19,7 +19,7 @@ cov=""; [ "${1-}" = "--coverage" ] && cov="--coverage"
 
 [ -f test.sh ] && [ -d test ] || { echo "No test tree here (test/ + test.sh)." >&2; exit 1; }
 
-find_list() { for c in . scripts ../scripts ../../scripts; do [ -f "$c/$1" ] && { echo "$c/$1"; return; }; done; }
+find_list() { for c in . scripts; do [ -f "$c/$1" ] && { echo "$c/$1"; return; }; done; }
 names_from() { [ -f "$1" ] && awk 'NF && $0!~/^[[:space:]]*#/{n=split($0,a,"/");print a[n]}' "$1"; }
 
 lang="C"

@@ -112,6 +112,7 @@ static void          p101_env_call_log_observer(const struct p101_env *env, p101
 static void          p101_env_log_append_char(char line[], size_t line_size, size_t *offset, char ch);
 static void          p101_env_log_append_text(char line[], size_t line_size, size_t *offset, const char *text);
 static void          p101_env_log_append_field(char line[], size_t line_size, size_t *offset, const char *text);
+static size_t        p101_env_log_finish_record(char line[], size_t line_size, size_t offset);
 
 struct p101_env *p101_env_create(struct p101_error *err, p101_env_tracer tracer)
 {
@@ -1086,6 +1087,7 @@ static void p101_env_exec_fd_log(FILE *stream, int fd, int cloexec, const char *
     p101_env_log_append_char(line, sizeof(line), &offset, '\t');
     p101_env_log_append_field(line, sizeof(line), &offset, target);
     p101_env_log_append_char(line, sizeof(line), &offset, '\n');
+    offset = p101_env_log_finish_record(line, sizeof(line), offset);
 
     fwrite(line, 1, offset, stream);    // NOLINT(cert-err33-c)
     fflush(stream);                     // NOLINT(cert-err33-c)
@@ -1141,6 +1143,7 @@ static void p101_env_alloc_log_observer(const struct p101_env *env, p101_env_all
     p101_env_log_append_char(line, sizeof(line), &offset, '\t');
     p101_env_log_append_field(line, sizeof(line), &offset, file_name);
     p101_env_log_append_char(line, sizeof(line), &offset, '\n');
+    offset = p101_env_log_finish_record(line, sizeof(line), offset);
 
     fwrite(line, 1, offset, stream);    // NOLINT(cert-err33-c)
     fflush(stream);                     // NOLINT(cert-err33-c)
@@ -1231,6 +1234,7 @@ static void p101_env_call_log_observer(const struct p101_env *env, p101_env_call
     p101_env_log_append_char(line, sizeof(line), &offset, '\t');
     p101_env_log_append_field(line, sizeof(line), &offset, file_name);
     p101_env_log_append_char(line, sizeof(line), &offset, '\n');
+    offset = p101_env_log_finish_record(line, sizeof(line), offset);
 
     fwrite(line, 1, offset, stream);    // NOLINT(cert-err33-c)
     fflush(stream);                     // NOLINT(cert-err33-c)
@@ -1266,6 +1270,36 @@ static void p101_env_log_append_text(char line[], size_t line_size, size_t *offs
         p101_env_log_append_char(line, line_size, offset, *text);
         text++;
     }
+}
+
+static size_t p101_env_log_finish_record(char line[], size_t line_size, size_t offset)
+{
+    if(line_size == 0U)
+    {
+        return 0U;
+    }
+
+    if(offset == 0U)
+    {
+        line[0] = '\n';
+        return 1U;
+    }
+
+    if(line[offset - 1U] != '\n')
+    {
+        if(offset + 1U < line_size)
+        {
+            line[offset] = '\n';
+            offset++;
+            line[offset] = '\0';
+        }
+        else
+        {
+            line[offset - 1U] = '\n';
+        }
+    }
+
+    return offset;
 }
 
 static void p101_env_log_append_field(char line[], size_t line_size, size_t *offset, const char *text)

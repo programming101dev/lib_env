@@ -43,11 +43,10 @@ for file in "${files_to_link[@]}"; do
     fi
 done
 
-# Special handling for .flags
-flags_source="$source_dir/../.flags"
-if [ ! -e "$flags_source" ]; then
-    flags_source="$source_dir/.flags"
-fi
+# Special handling for .flags. It may itself be a symlink to a shared,
+# expensive compiler-flag cache, but it must be provided by the explicit source
+# directory rather than discovered from a parent layout.
+flags_source="$source_dir/.flags"
 
 flags_dest="$dest_dir/.flags"
 
@@ -59,5 +58,5 @@ if [ -e "$flags_source" ]; then
         echo ".flags already linked in $dest_dir. Skipping."
     fi
 else
-    echo ".flags not found in $source_dir or its parent directory. Skipping."
+    echo ".flags not found in $source_dir. Skipping."
 fi

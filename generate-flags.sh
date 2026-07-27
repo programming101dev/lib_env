@@ -2,6 +2,7 @@
 
 # Exit the script if any command fails
 set -e
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
 # --help / -h -> description, exit 0 (P101 uniform CLI help)
 case " $* " in
@@ -27,7 +28,7 @@ is_flag_supported()
     fi
 
     # Attempt to compile and link the temporary source file with the specified flag
-    $compiler -Werror $extra_flags "$flag" -o /tmp/test_output "$tmp_src" >> "../.flags/${compiler}.txt" 2>&1
+    $compiler -Werror $extra_flags "$flag" -o /tmp/test_output "$tmp_src" >> ".flags/${compiler}.txt" 2>&1
 
     if [[ -f /tmp/test_output ]]; then
         echo -e "\033[32m$flag supported by $compiler\033[0m"
@@ -36,8 +37,8 @@ is_flag_supported()
         return 1
     else
         echo -e "\033[31m$flag not supported by $compiler\033[0m"
-        echo "$flag is not supported" >> "../.flags/${compiler}.txt"
-        echo "------------------------------" >> "../.flags/${compiler}.txt"
+        echo "$flag is not supported" >> ".flags/${compiler}.txt"
+        echo "------------------------------" >> ".flags/${compiler}.txt"
         rm -f /tmp/test_output
         return 0
     fi
@@ -53,7 +54,7 @@ process_compiler_flags()
     local flags=("$@")
     local supported_flags=()
 
-    rm -f "../.flags/${compiler}.txt"
+    rm -f ".flags/${compiler}.txt"
 
     for flag in "${flags[@]}"; do
         set +e
@@ -66,7 +67,7 @@ process_compiler_flags()
     flags_string=$(IFS=" "; echo "${supported_flags[*]}")
 
     # Write to file
-    printf "%s" "$flags_string" > "../.flags/${compiler}/${category}_flags.txt"
+    printf "%s" "$flags_string" > ".flags/${compiler}/${category}_flags.txt"
 }
 
 process_sanitizer_category()
@@ -100,7 +101,7 @@ process_sanitizer_category()
     flags_string=$(IFS=" "; echo "${supported_flags[*]}")
 
     # Write to file
-    printf "%s" "$flags_string" > "../.flags/${compiler}/${category_name}_sanitizer_flags.txt"
+    printf "%s" "$flags_string" > ".flags/${compiler}/${category_name}_sanitizer_flags.txt"
 }
 
 # Main processing function
@@ -1429,7 +1430,7 @@ process_flags()
     echo "Checking: $compiler"
 
     # Prepare directory
-    local flag_dir="../.flags/${compiler}"
+    local flag_dir=".flags/${compiler}"
     mkdir -p "$flag_dir"
     rm -f "$flag_dir"/*
 
