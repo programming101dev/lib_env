@@ -134,23 +134,88 @@ extern "C"
     p101_env_event_line_status p101_env_read_event_line(struct p101_error *err, FILE *stream, char *line, size_t line_size);
 
     /*
-     * Event log format version. Version 1 is the stable default. Version 2 adds
+     * Event log format version. Version 2 is the only supported schema. It adds
      * per-env sequence and timestamp fields immediately after pid:
      *
      *   MAGIC<TAB>2<TAB>pid<TAB>seq<TAB>mono_ns<TAB>wall_unix_ns<TAB>...
      *
-     * Set P101_EVENT_LOG_VERSION=2 to request v2 through the environment
-     * bridge, or call p101_env_set_event_log_version(). Invalid versions return
-     * EINVAL and leave the previous version unchanged.
+     * P101_EVENT_LOG_VERSION is accepted only when set to 2. Invalid versions
+     * return EINVAL and leave the current version unchanged.
      */
     typedef enum
     {
-        P101_ENV_EVENT_LOG_VERSION_1 = 1,
         P101_ENV_EVENT_LOG_VERSION_2 = 2
     } p101_env_event_log_version;
 
     int p101_env_set_event_log_version(struct p101_env *env, int version);
     int p101_env_get_event_log_version(const struct p101_env *env);
+
+    typedef enum
+    {
+        P101_ENV_EVENT_PARSE_OTHER = 0,
+        P101_ENV_EVENT_PARSE_OK,
+        P101_ENV_EVENT_PARSE_MALFORMED,
+        P101_ENV_EVENT_PARSE_BAD_VERSION
+    } p101_env_event_parse_status;
+
+    typedef enum
+    {
+        P101_ENV_EVENT_RECORD_FD = 0,
+        P101_ENV_EVENT_RECORD_ALLOC,
+        P101_ENV_EVENT_RECORD_FORK,
+        P101_ENV_EVENT_RECORD_EXEC,
+        P101_ENV_EVENT_RECORD_CALL
+    } p101_env_event_record_kind;
+
+    typedef enum
+    {
+        P101_ENV_EVENT_FD_OPEN = 0,
+        P101_ENV_EVENT_FD_CLOSE
+    } p101_env_event_fd_kind;
+
+    typedef enum
+    {
+        P101_ENV_EVENT_ALLOC_ALLOC = 0,
+        P101_ENV_EVENT_ALLOC_FREE,
+        P101_ENV_EVENT_ALLOC_REALLOC
+    } p101_env_event_alloc_kind;
+
+    typedef enum
+    {
+        P101_ENV_EVENT_CALL_ENTER = 0,
+        P101_ENV_EVENT_CALL_EXIT
+    } p101_env_event_call_kind;
+
+    struct p101_env_event_record
+    {
+        p101_env_event_record_kind record_kind;
+        long                       pid;
+        long                       child_pid;
+        size_t                     sequence;
+        size_t                     monotonic_ns;
+        size_t                     wall_unix_ns;
+        int                        monotonic_ns_available;
+        int                        wall_unix_ns_available;
+        int                        fd;
+        int                        cloexec;
+        p101_env_event_fd_kind     fd_kind;
+        p101_env_event_alloc_kind  alloc_kind;
+        p101_env_event_call_kind   call_kind;
+        const char                *ptr;     /* points into the line buffer */
+        const char                *new_ptr; /* points into the line buffer, or NULL */
+        const char                *target;  /* points into the line buffer */
+        size_t                     size;
+        int                        line_number;
+        const char                *function_name; /* points into the line buffer */
+        const char                *call_name;     /* points into the line buffer */
+        const char                *arguments;     /* points into the line buffer */
+        const char                *result;        /* points into the line buffer */
+        const char                *file_name;     /* points into the line buffer */
+    };
+
+    p101_env_event_parse_status p101_env_parse_event_line(char *line, struct p101_env_event_record *record);
+    int                         p101_env_event_line_is_ours(const char *line);
+    const char                 *p101_env_event_parse_status_name(p101_env_event_parse_status status);
 
     /* A short label for this env (typically a thread name). When set, the
      * default tracer prints it, so interleaved traces from one-env-per-thread
