@@ -49,9 +49,9 @@ firstline() { "$@" 2>/dev/null | head -1; }
 # output. Portable (BSD/macOS + GNU): no sed 'T', no GNU-only flags.
 ver_num() { "$@" 2>/dev/null | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1; }
 
-# ---- locate config lists. In a copied project these are expected at the repo
+# ---- locate config lists. In a fresh project instance these are expected at the repo
 # root, usually as symlinks to a shared cache. Do not search parent directories:
-# copied templates must not silently depend on the surrounding checkout layout.
+# fresh template instances must not silently depend on the surrounding checkout layout.
 find_list() {
   local n="$1" c
   for c in "." "scripts"; do
