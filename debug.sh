@@ -12,7 +12,7 @@
 # stepping is clean — run ./check.sh / ./fuzz.sh for the sanitizer-instrumented
 # builds. Sources, defines, standard and libraries all come from config.cmake.
 set -euo pipefail
-cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
 usage() {
   cat <<'USAGE'

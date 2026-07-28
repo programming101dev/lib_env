@@ -3,7 +3,7 @@
 # (mirrors build-all.sh). For each supported compiler it configures the main
 # build (./change-compiler.sh) then runs ./test.sh, and tallies pass/fail.
 set -uo pipefail
-cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
 usage() {
   cat <<'USAGE'

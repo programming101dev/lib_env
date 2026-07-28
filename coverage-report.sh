@@ -5,7 +5,7 @@
 # (test/build-<cc>) — so `./test.sh --coverage && ./coverage-report.sh -R`
 # shows what your Unity tests exercised. Platforms: macOS, Linux, FreeBSD.
 set -euo pipefail
-cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
 usage() {
   cat <<'USAGE'

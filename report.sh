@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # report.sh — one entry point for this project's coverage and profiling reports.
 set -euo pipefail
-cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
 usage() {
   cat <<'USAGE'

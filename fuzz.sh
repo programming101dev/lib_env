@@ -9,7 +9,7 @@
 # so it drops straight into a hook or CI step. Language is read from
 # config.cmake (PROJECT_LANGUAGE), the same way test.sh does it.
 set -euo pipefail
-cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
 usage() {
   cat <<'USAGE'
@@ -51,10 +51,12 @@ fi
 # find a compiler that can actually link a libFuzzer target in this language
 probe() {
   local cc="$1"
+  local probe_out
   command -v "$cc" >/dev/null 2>&1 || [ -x "$cc" ] || return 1
+  probe_out="$(mktemp "/tmp/.p101_fzprobe.XXXXXX")" || return 1
   printf '%s\n' "$probe_src" \
-    | "$cc" -x "$xlang" -fsanitize=fuzzer -o /tmp/.p101_fzprobe.$$ - >/dev/null 2>&1 || return 1
-  rm -f /tmp/.p101_fzprobe.$$; return 0
+    | "$cc" -x "$xlang" -fsanitize=fuzzer -o "$probe_out" - >/dev/null 2>&1 || { rm -f "$probe_out"; return 1; }
+  rm -f "$probe_out"; return 0
 }
 CC=""
 for cand in $cands; do

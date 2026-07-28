@@ -4,7 +4,7 @@
 # test code are not subjected to the project's strict analysis build. Uses the
 # same compiler the main build is using (from .last-build-dir). C and C++.
 set -euo pipefail
-cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
 usage() {
   cat <<'USAGE'
@@ -45,12 +45,12 @@ ccbase="$(basename "$comp")"
 case "$main_bd" in build-*) sfx="${main_bd#build-}" ;; *) sfx="$ccbase" ;; esac
 test_bd="test/build-${sfx}"
 cov_arg=""; [ "$coverage" -eq 1 ] && cov_arg="-DP101_TEST_COVERAGE=ON"
-compile_flag_arg="-DCMAKE_C_FLAGS="
-if [ "$lang" = "CXX" ] || [ "$lang" = "CPP" ]; then
-  compile_flag_arg="-DCMAKE_CXX_FLAGS="
-fi
 sanitizer_flags="$(sed -n 's/^DETECTED_SANITIZERS:STRING=//p' "$main_bd/CMakeCache.txt" | head -1)"
 sanitizer_flags="${sanitizer_flags//;/ }"
+compile_flag_arg="-DCMAKE_C_FLAGS=$sanitizer_flags"
+if [ "$lang" = "CXX" ] || [ "$lang" = "CPP" ]; then
+  compile_flag_arg="-DCMAKE_CXX_FLAGS=$sanitizer_flags"
+fi
 sanitizer_args=()
 if [ -n "$sanitizer_flags" ]; then
   sanitizer_args+=("-DCMAKE_EXE_LINKER_FLAGS=$sanitizer_flags")

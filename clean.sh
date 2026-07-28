@@ -5,7 +5,7 @@
 # Never touches source (src/, include/, test/*.c, config.cmake, *.sh) or the
 # committed fuzz corpus (fuzz/corpus/). Safe to re-run.
 set -euo pipefail
-cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
 usage() {
   cat <<'USAGE'

@@ -131,9 +131,8 @@ static void               p101_env_log_append_char(char line[], size_t line_size
 static void               p101_env_log_append_text(char line[], size_t line_size, size_t *offset, const char *text);
 static void               p101_env_log_append_field(char line[], size_t line_size, size_t *offset, const char *text);
 static size_t             p101_env_log_finish_record(char line[], size_t line_size, size_t offset);
-static char              *p101_env_event_split(char **cursor);
+static void               p101_env_event_unescape_char(char **read_cursor, char **write_cursor);
 static int                p101_env_event_parse_long_field(const char *text, long min, long max, long *out);
-static int                p101_env_event_parse_size_field(const char *text, size_t *out);
 static int                p101_env_event_parse_optional_size_field(const char *text, size_t *out, int *available);
 static p101_env_event_parse_status p101_env_event_parse_version_metadata(char **cursor, struct p101_env_event_record *record);
 static p101_env_event_parse_status p101_env_event_parse_fd(char *line, struct p101_env_event_record *record);
@@ -167,6 +166,12 @@ struct p101_env *p101_env_create(struct p101_error *err, p101_env_tracer tracer)
     if(env != NULL)
     {
         p101_env_configure_from_environment(env, err);
+    }
+
+    if(env != NULL && p101_error_has_error(err))
+    {
+        p101_env_destroy(env);
+        env = NULL;
     }
 
     return env;
@@ -245,6 +250,12 @@ struct p101_env *p101_env_dup(struct p101_error *err, const struct p101_env *env
             new_env->call_observer_data = NULL;
             new_env->call_log_options   = P101_ENV_CALL_LOG_DEFAULT;
             p101_env_configure_call_log_from_environment(new_env, err);
+        }
+
+        if(p101_error_has_error(err))
+        {
+            p101_env_destroy(new_env);
+            new_env = NULL;
         }
     }
 
@@ -1785,7 +1796,7 @@ static void p101_env_log_append_field(char line[], size_t line_size, size_t *off
     }
 }
 
-static char *p101_env_event_split(char **cursor)
+char *p101_env_event_split(char **cursor)
 {
     char *start;
     char *tab;
@@ -1816,6 +1827,60 @@ static char *p101_env_event_split(char **cursor)
 
 done:
     return start;
+}
+
+static void p101_env_event_unescape_char(char **read_cursor, char **write_cursor)
+{
+    (*read_cursor)++;
+    if(**read_cursor == 't')
+    {
+        **write_cursor = '\t';
+    }
+    else if(**read_cursor == 'n')
+    {
+        **write_cursor = '\n';
+    }
+    else if(**read_cursor == 'r')
+    {
+        **write_cursor = '\r';
+    }
+    else
+    {
+        **write_cursor = **read_cursor;
+    }
+    (*write_cursor)++;
+    (*read_cursor)++;
+}
+
+void p101_env_event_unescape_field(char *field)
+{
+    char *read_cursor;
+    char *write_cursor;
+
+    if(field == NULL)
+    {
+        goto done;
+    }
+
+    read_cursor  = field;
+    write_cursor = field;
+    while(*read_cursor != '\0')
+    {
+        if(read_cursor[0] == '\\' && read_cursor[1] != '\0')
+        {
+            p101_env_event_unescape_char(&read_cursor, &write_cursor);
+        }
+        else
+        {
+            *write_cursor = *read_cursor;
+            write_cursor++;
+            read_cursor++;
+        }
+    }
+    *write_cursor = '\0';
+
+done:
+    return;
 }
 
 static int p101_env_event_parse_long_field(const char *text, long min, long max, long *out)
@@ -1881,7 +1946,7 @@ done:
     return result;
 }
 
-static int p101_env_event_parse_size_field(const char *text, size_t *out)
+int p101_env_event_parse_size_field(const char *text, size_t *out)
 {
     const char *cursor;
     size_t      value;

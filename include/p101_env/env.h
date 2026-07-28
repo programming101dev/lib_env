@@ -215,6 +215,9 @@ extern "C"
 
     p101_env_event_parse_status p101_env_parse_event_line(char *line, struct p101_env_event_record *record);
     int                         p101_env_event_line_is_ours(const char *line);
+    char                       *p101_env_event_split(char **cursor);
+    void                        p101_env_event_unescape_field(char *field);
+    int                         p101_env_event_parse_size_field(const char *text, size_t *out);
     const char                 *p101_env_event_parse_status_name(p101_env_event_parse_status status);
 
     /* A short label for this env (typically a thread name). When set, the

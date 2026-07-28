@@ -3,7 +3,7 @@
 # the result. macOS -> Instruments (Time Profiler) via xctrace, else `sample`;
 # other platforms -> perf. Sampling needs no -pg, so any build works.
 set -euo pipefail
-cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
 usage() {
   cat <<'USAGE'
