@@ -51,15 +51,19 @@ esac
 
 # -C / --format-check : verify formatting WITHOUT modifying anything (fast, no
 # build needed) — ideal for a git pre-commit hook. Non-zero exit if any file
-# would be reformatted. clang-format is optional; absent => skip (exit 0).
+# would be reformatted. A requested format check requires clang-format.
 case " $* " in
   *" -C "*|*" --format-check "*)
     if ! command -v clang-format >/dev/null 2>&1; then
-      echo "clang-format not found; skipping format check." >&2; exit 0
+      echo "clang-format not found; cannot run requested format check." >&2
+      exit 2
     fi
-    _fcfiles=$(find src include -type f \( -name '*.c' -o -name '*.h' -o -name '*.cpp' -o -name '*.hpp' -o -name '*.cc' -o -name '*.hh' \) 2>/dev/null)
-    if [[ -z "$_fcfiles" ]]; then echo "format-check: no sources found."; exit 0; fi
-    if clang-format --dry-run --Werror -style=file $_fcfiles; then
+    _fcfiles=()
+    while IFS= read -r -d '' _fcfile; do
+      _fcfiles+=("$_fcfile")
+    done < <(find src include -type f \( -name '*.c' -o -name '*.h' -o -name '*.cpp' -o -name '*.hpp' -o -name '*.cc' -o -name '*.hh' \) -print0 2>/dev/null)
+    if [[ ${#_fcfiles[@]} -eq 0 ]]; then echo "format-check: no sources found."; exit 0; fi
+    if clang-format --dry-run --Werror -style=file "${_fcfiles[@]}"; then
       echo "format-check: clean."
       exit 0
     else

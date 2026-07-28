@@ -5,7 +5,7 @@
 # (test/build-<cc>) — so `./test.sh --coverage && ./coverage-report.sh -R`
 # shows what your Unity tests exercised. Platforms: macOS, Linux, FreeBSD.
 set -euo pipefail
-CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
 usage() {
   cat <<'USAGE'
@@ -115,8 +115,9 @@ cov_out="coverage${_sfx:+-$_sfx}"
 rm -rf "$cov_out"; mkdir -p "$cov_out"
 echo ">> gcovr (gcov: $gcov_tool) over: ${cov_dirs[*]} -> $cov_out/"
 gcovr --gcov-executable "$gcov_tool" -r . "${cov_dirs[@]}" --decisions --html-details -o "$cov_out/index.html"
-gcovr --gcov-executable "$gcov_tool" -r . "${cov_dirs[@]}" --decisions > "$cov_out/summary.txt" 2>/dev/null || true
-echo "---- summary ----"; cat "$cov_out/summary.txt" 2>/dev/null || true
+gcovr --gcov-executable "$gcov_tool" -r . "${cov_dirs[@]}" --decisions > "$cov_out/summary.txt"
+echo "---- summary ----"
+cat "$cov_out/summary.txt"
 
 if [[ $no_open -eq 0 ]]; then
   if   command -v open     >/dev/null 2>&1; then open "$cov_out/index.html" >/dev/null 2>&1 || true

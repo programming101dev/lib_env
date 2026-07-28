@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Exit the script if any command fails
-set -e
+set -euo pipefail
 
 # --- opt-in coverage / profiling (P101) ---------------------------------
 # Pull the long flags out before the normal option parser and export them.
@@ -64,10 +64,19 @@ while getopts ":f:t:k:" opt; do
 done
 
 # Read the C compilers from the file into an array
+[ -f supported_c_compilers.txt ] || {
+    echo "Error: supported_c_compilers.txt is missing." >&2
+    exit 1
+}
 c_compilers=()
-while IFS= read -r line; do
-    c_compilers+=("$line")
+while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%%#*}"
+    [[ -n "${line//[[:space:]]/}" ]] && c_compilers+=("$line")
 done < "supported_c_compilers.txt"
+[[ ${#c_compilers[@]} -gt 0 ]] || {
+    echo "Error: supported_c_compilers.txt contains no compilers." >&2
+    exit 1
+}
 
 # Loop through the C compilers array
 for c_compiler in "${c_compilers[@]}"; do

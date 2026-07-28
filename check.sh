@@ -12,7 +12,7 @@
 # NOTE: intentionally NOT `set -e`. We run each step, record pass/fail, and
 # report them all so you can fix everything in one pass, not one-at-a-time.
 set -uo pipefail
-CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" || exit 1
 
 fuzz_secs=20
 do_fuzz=1
@@ -33,7 +33,7 @@ Usage: ./check.sh [-t <seconds>] [--cov <pct>] [--no-fuzz] [--no-format] [-v]
   --doctor-count <n>
                  p101-doctor fault-injection cases (default 4).
   --cov <pct>    also run the tests with coverage and FAIL if line coverage is
-                 below <pct> (needs gcovr; skipped cleanly if it isn't installed).
+                 below <pct> (requires gcovr and coverage-report.sh).
   --no-fuzz      skip the fuzz smoke step.
   --no-format    skip the format check.
   --no-p101-doctor
@@ -70,12 +70,18 @@ if [ "$do_format" -eq 1 ] && [ -x ./build.sh ]; then
   if ./build.sh --format-check; then fmt_st="PASS"; else fmt_st="FAIL"; failed="$failed format"; fi
 elif [ "$do_format" -eq 0 ]; then
   fmt_st="SKIP (--no-format)"
+else
+  fmt_st="FAIL (build.sh missing)"
+  failed="$failed format"
 fi
 
 # 2) strict analysis build -----------------------------------------------------
 if [ -x ./build.sh ]; then
   hdr "strict build"
   if ./build.sh $quiet_build; then build_st="PASS"; else build_st="FAIL"; failed="$failed build"; fi
+else
+  build_st="FAIL (build.sh missing)"
+  failed="$failed build"
 fi
 
 # 3) unit tests — only meaningful if the build succeeded -----------------------
@@ -112,7 +118,12 @@ fi
 if [ "$do_p101_doctor" -eq 0 ]; then
   p101_doctor_st="SKIP (--no-p101-doctor)"
 elif ! command -v p101-doctor >/dev/null 2>&1; then
-  p101_doctor_st="SKIP (p101-doctor not on PATH)"
+  if [ -f "$doctor_arg_file" ]; then
+    p101_doctor_st="FAIL (p101-doctor not on PATH)"
+    failed="$failed p101-doctor"
+  else
+    p101_doctor_st="SKIP (p101-doctor not on PATH)"
+  fi
 elif [ ! -f "$doctor_arg_file" ]; then
   p101_doctor_st="SKIP ($doctor_arg_file not found)"
 elif [ "$build_st" != "PASS" ]; then
@@ -127,7 +138,8 @@ else
   done < <(awk 'NF && $0 !~ /^[[:space:]]*#/ { for(i = 1; i <= NF; i++) print $i }' "$doctor_arg_file")
 
   if [ ! -x "$program" ]; then
-    p101_doctor_st="SKIP ($program not found)"
+    p101_doctor_st="FAIL ($program not found)"
+    failed="$failed p101-doctor"
   else
     doctor_dir="p101-doctor-check"
     rm -rf "$doctor_dir"
@@ -143,11 +155,14 @@ fi
 # 6) coverage gate — opt-in via --cov <pct> ------------------------------------
 if [ -n "$cov_min" ]; then
   if [ ! -x ./coverage-report.sh ]; then
-    cov_st="SKIP (no coverage-report.sh)"
+    cov_st="FAIL (no coverage-report.sh)"
+    failed="$failed coverage"
   elif ! command -v gcovr >/dev/null 2>&1; then
-    cov_st="SKIP (gcovr not installed)"
+    cov_st="FAIL (gcovr not installed)"
+    failed="$failed coverage"
   elif [ "$test_st" != "PASS" ]; then
-    cov_st="SKIP (tests didn't run)"
+    cov_st="FAIL (tests didn't pass)"
+    failed="$failed coverage"
   else
     hdr "coverage gate (>= ${cov_min}% lines)"
     if ./coverage-report.sh --report-only --no-open --min "$cov_min"; then

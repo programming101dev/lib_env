@@ -72,7 +72,7 @@ missing_count=0
 
 # Loop through the list of tools
 for tool in "${tools[@]}"; do
-    check_tool "$tool" || ((missing_count++))
+    check_tool "$tool" || missing_count=$((missing_count + 1))
 done
 
 # Return the count of missing tools
@@ -80,4 +80,3 @@ echo "Total missing tools: $missing_count"
 
 # Exit with the count of missing tools as the status code
 exit "$missing_count"
-

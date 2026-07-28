@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # report.sh — one entry point for this project's coverage and profiling reports.
 set -euo pipefail
-CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
 usage() {
   cat <<'USAGE'
@@ -10,7 +10,8 @@ Usage: ./report.sh <coverage|profile> [options] [-- <program args>]
   coverage   run + gcovr HTML report in  coverage-<compiler>/index.html
              (aliases: cov, c)
   profile    run under a sampling profiler -> profile-<compiler>/
-             macOS: Instruments; Linux: perf   (aliases: prof, p)
+             macOS: Instruments; Linux: perf; FreeBSD: pmcstat
+             (aliases: prof, p)
 
 Options are passed through to the underlying script, e.g.:
   ./report.sh coverage -- -v -d 1        # run with args, then report coverage

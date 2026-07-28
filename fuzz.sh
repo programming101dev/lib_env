@@ -9,7 +9,7 @@
 # so it drops straight into a hook or CI step. Language is read from
 # config.cmake (PROJECT_LANGUAGE), the same way test.sh does it.
 set -euo pipefail
-CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
 usage() {
   cat <<'USAGE'
@@ -40,13 +40,28 @@ done
 lang="C"; [ -f config.cmake ] && lang="$(sed -n 's/.*set(PROJECT_LANGUAGE[[:space:]]*"\{0,1\}\([A-Za-z]*\).*/\1/p' config.cmake | head -1)"
 if [ "$lang" = "CXX" ] || [ "$lang" = "CPP" ]; then
   xlang="c++"; cc_var="CMAKE_CXX_COMPILER"
-  cands="${FUZZ_CC:-} clang++-22 clang++-21 clang++ /opt/homebrew/opt/llvm/bin/clang++"
+  compiler_list="supported_cxx_compilers.txt"
+  default_clang="clang++"
+  homebrew_clang="/opt/homebrew/opt/llvm/bin/clang++"
   probe_src='extern "C" int LLVMFuzzerTestOneInput(const unsigned char*d,unsigned long s){(void)d;(void)s;return 0;}'
 else
   xlang="c";   cc_var="CMAKE_C_COMPILER"
-  cands="${FUZZ_CC:-} clang-22 clang-21 clang /opt/homebrew/opt/llvm/bin/clang"
+  compiler_list="supported_c_compilers.txt"
+  default_clang="clang"
+  homebrew_clang="/opt/homebrew/opt/llvm/bin/clang"
   probe_src='int LLVMFuzzerTestOneInput(const unsigned char*d,unsigned long s){(void)d;(void)s;return 0;}'
 fi
+
+cands=()
+[ -n "${FUZZ_CC:-}" ] && cands+=("$FUZZ_CC")
+if [ -f "$compiler_list" ]; then
+  while IFS= read -r candidate || [ -n "$candidate" ]; do
+    candidate="${candidate%%#*}"
+    [ -n "${candidate//[[:space:]]/}" ] || continue
+    case "$(basename "$candidate")" in clang*) cands+=("$candidate") ;; esac
+  done < "$compiler_list"
+fi
+cands+=("$default_clang" "$homebrew_clang")
 
 # find a compiler that can actually link a libFuzzer target in this language
 probe() {
@@ -59,7 +74,7 @@ probe() {
   rm -f "$probe_out"; return 0
 }
 CC=""
-for cand in $cands; do
+for cand in "${cands[@]}"; do
   [ -n "$cand" ] || continue
   if probe "$cand"; then CC="$cand"; break; fi
 done

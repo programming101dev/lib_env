@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # profile-report.sh — run the built target under a sampling profiler and show
 # the result. macOS -> Instruments (Time Profiler) via xctrace, else `sample`;
-# other platforms -> perf. Sampling needs no -pg, so any build works.
+# Linux -> perf; FreeBSD -> pmcstat. Sampling needs no -pg, so any build works.
 set -euo pipefail
-CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
 usage() {
   cat <<'USAGE'
@@ -15,6 +15,8 @@ Usage: ./profile-report.sh [-- <program args>]
 
   macOS: `xctrace` (Instruments Time Profiler); falls back to `sample`.
   Linux: `perf record -g` then `perf report`.
+  FreeBSD: `pmcstat` process sampling (P101_PMC_EVENT overrides the
+           architecture-dependent event name; default: instructions).
   NOTE: a program that finishes in milliseconds yields no samples — give it a
   real workload (a loop / large input) to get a meaningful profile.
 USAGE
@@ -60,30 +62,47 @@ if [[ "$os" == "Darwin" ]]; then
     out="$prof_dir/profile.trace"
     echo ">> Instruments Time Profiler (xctrace) -> $out"
     xctrace record --template 'Time Profiler' --output "$out" \
-      --launch -- "$bin" ${prog_args[@]+"${prog_args[@]}"} || true
-    if [[ -e "$out" ]]; then echo "Opening $out in Instruments"; open "$out" >/dev/null 2>&1 || true
-    else echo "No trace produced (program too short?)." >&2; fi
+      --launch -- "$bin" ${prog_args[@]+"${prog_args[@]}"}
+    [[ -e "$out" ]] || { echo "xctrace produced no trace." >&2; exit 1; }
+    echo "Opening $out in Instruments"
+    open "$out" >/dev/null 2>&1 || true
   elif command -v sample >/dev/null 2>&1; then
     echo ">> sample (xctrace not found; install Xcode for Instruments)"
     "$bin" ${prog_args[@]+"${prog_args[@]}"} & pid=$!
-    sample "$pid" 10 -mayDie -f "$prof_dir/profile.sample.txt" 2>/dev/null || true
+    sample "$pid" 10 -mayDie -f "$prof_dir/profile.sample.txt"
     wait "$pid" 2>/dev/null || true
+    [[ -s "$prof_dir/profile.sample.txt" ]] || { echo "sample produced no report." >&2; exit 1; }
     echo "Report: $(pwd)/$prof_dir/profile.sample.txt"
     open "$prof_dir/profile.sample.txt" 2>/dev/null || true
   else
     echo "Neither xctrace nor sample found (install Xcode / Command Line Tools)." >&2
     exit 1
   fi
-else
+elif [[ "$os" == "Linux" ]]; then
   if ! command -v perf >/dev/null 2>&1; then
     echo "perf not found. Install it, e.g.:" >&2
     echo "  sudo apt install linux-tools-common linux-tools-\$(uname -r)" >&2
-    echo "(On FreeBSD, use 'pmcstat' or 'dtrace' instead.)" >&2
     exit 1
   fi
   echo ">> perf record -g -- $bin ${prog_args[*]-}"
   perf record -g -o "$prof_dir/perf.data" -- "$bin" ${prog_args[@]+"${prog_args[@]}"}
-  echo ">> perf report  (interactive: q to quit; text copy -> $prof_dir/profile.perf.txt)"
-  perf report -i "$prof_dir/perf.data" --stdio > "$prof_dir/profile.perf.txt" 2>/dev/null || true
-  perf report -i "$prof_dir/perf.data" || true
+  echo ">> perf report --stdio -> $prof_dir/profile.perf.txt"
+  perf report -i "$prof_dir/perf.data" --stdio > "$prof_dir/profile.perf.txt"
+  [[ -s "$prof_dir/profile.perf.txt" ]] || { echo "perf produced no report." >&2; exit 1; }
+elif [[ "$os" == "FreeBSD" ]]; then
+  command -v pmcstat >/dev/null 2>&1 || {
+    echo "pmcstat not found. Install/use the FreeBSD hwpmc tools." >&2
+    exit 1
+  }
+  event="${P101_PMC_EVENT:-instructions}"
+  data="$prof_dir/profile.pmc"
+  report="$prof_dir/profile.pmc.txt"
+  echo ">> pmcstat process sampling ($event) -> $data"
+  pmcstat -P "$event" -O "$data" "$bin" ${prog_args[@]+"${prog_args[@]}"}
+  echo ">> pmcstat offline callchain report -> $report"
+  pmcstat -R "$data" -G "$report"
+  [[ -s "$report" ]] || { echo "pmcstat produced no report." >&2; exit 1; }
+else
+  echo "Unsupported profiling platform: $os" >&2
+  exit 1
 fi

@@ -10,7 +10,7 @@
 #
 # Platforms: macOS, Linux, FreeBSD.  Compilers: gcc and clang.
 set -uo pipefail        # NOT -e: we run every check, then summarise.
-CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" || exit 1
 
 usage() {
   cat <<'USAGE'
@@ -157,14 +157,14 @@ if have clang-format; then printf '    %s clang-format  %s  -> ./build.sh --form
 else printf '    %s clang-format  missing  (optional; ./build.sh --format skips formatting)\n' "$WARN"; fi
 
 # ===================== instrumentation =====================
-# read a bucket: prints AVAIL/na by emptiness
-bucket_state() { if [ -s "$1" ]; then echo avail; else echo na; fi; }
-
 report_instr() {
   local cc="$1" d=".flags/$1"
   line
   printf 'instrumentation — %s\n' "$cc"
-  if ! have "$cc"; then printf '  %s %s not on PATH — cannot use here\n' "$NO" "$cc"; fi
+  if ! have "$cc"; then
+    printf '  %s %s not on PATH — cannot use here\n' "$NO" "$cc"
+    required_missing=1
+  fi
   if [ ! -d "$d" ]; then
     printf '  %s no probed flags in .flags/%s — run ./update.sh -c %s\n' "$WARN" "$cc" "$cc"
     return 0
@@ -191,7 +191,9 @@ report_instr() {
             else printf '              sampling: %s install Xcode / Command Line Tools\n' "$NO"; fi ;;
     Linux)  if have perf; then printf '              sampling: %s perf via ./report.sh profile\n' "$OK"
             else printf '              sampling: %s perf not installed (apt install linux-tools-...)\n' "$NO"; fi ;;
-    *)      printf '              sampling: use pmcstat / dtrace (FreeBSD)\n' ;;
+    FreeBSD) if have pmcstat; then printf '              sampling: %s pmcstat via ./report.sh profile\n' "$OK"
+             else printf '              sampling: %s pmcstat not installed/available\n' "$NO"; fi ;;
+    *)      printf '              sampling: %s unsupported platform\n' "$NO" ;;
   esac
 
   # sanitizers — partition every probed *_sanitizer_flags.txt into avail / n-a

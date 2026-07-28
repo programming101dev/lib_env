@@ -3,7 +3,7 @@
 # (mirrors build-all.sh). For each supported compiler it configures the main
 # build (./change-compiler.sh) then runs ./test.sh, and tallies pass/fail.
 set -uo pipefail
-CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" || exit 1
 
 usage() {
   cat <<'USAGE'
@@ -36,7 +36,11 @@ for cc in $clist; do
   echo "==================================================================="
   echo ">> compiler: $cc"
   echo "==================================================================="
-  if ! command -v "$cc" >/dev/null 2>&1; then echo "   (skip: $cc not on PATH)"; continue; fi
+  if ! command -v "$cc" >/dev/null 2>&1; then
+    echo "   (missing supported compiler: $cc)"
+    fail=$((fail+1)); failed="$failed $cc"
+    continue
+  fi
   if ./change-compiler.sh -c "$cc" >/dev/null 2>&1; then
     if ./test.sh ${cov:+$cov}; then pass=$((pass+1)); else fail=$((fail+1)); failed="$failed $cc"; fi
   else
@@ -46,4 +50,4 @@ done
 
 echo "==================================================================="
 printf 'test-all: %d passed, %d failed%s\n' "$pass" "$fail" "${failed:+ (failed:$failed)}"
-[ "$fail" -eq 0 ]
+[ $((pass + fail)) -gt 0 ] && [ "$fail" -eq 0 ]

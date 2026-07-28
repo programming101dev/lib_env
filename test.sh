@@ -4,7 +4,7 @@
 # test code are not subjected to the project's strict analysis build. Uses the
 # same compiler the main build is using (from .last-build-dir). C and C++.
 set -euo pipefail
-CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
 usage() {
   cat <<'USAGE'

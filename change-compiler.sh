@@ -117,9 +117,20 @@ if [[ -z "${build_dir}" ]]; then
   build_dir="build-${cc_base}"
 fi
 
-# Persist chosen build dir for build.sh (and other helpers).
-# Keep it in project root; text file is portable.
-printf '%s\n' "$build_dir" > .last-build-dir
+# The build directory is recursively removed unless -R is used. Keep that
+# destructive operation inside this project and limited to conventional CMake
+# build-directory names.
+case "$build_dir" in
+  build|build-*|cmake-build-*) ;;
+  *)
+    echo "Error: unsafe build directory '$build_dir'." >&2
+    echo "Use a top-level name matching build, build-*, or cmake-build-*." >&2
+    exit 2 ;;
+esac
+if [[ -L "$build_dir" ]]; then
+  echo "Error: refusing to use symlink as build directory: $build_dir" >&2
+  exit 2
+fi
 
 # ----------------- sanitizers -----------------
 if ! $sanitizers_passed; then
@@ -145,7 +156,7 @@ fi
 
 # ----------------- build dir -----------------
 if ! $reuse_build; then
-  rm -rf "$build_dir"
+  rm -rf -- "$build_dir"
 fi
 mkdir -p "$build_dir"
 
@@ -183,5 +194,8 @@ fi
 
 echo "Running: cmake ${cmake_args[*]}"
 cmake "${cmake_args[@]}"
+
+# Only publish a build directory after CMake configured it successfully.
+printf '%s\n' "$build_dir" > .last-build-dir
 
 echo "Done. Now run:  ./build.sh"
