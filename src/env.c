@@ -1347,19 +1347,22 @@ static unsigned long long p101_env_next_event_sequence(const struct p101_env *en
 static void p101_env_timestamp_text(char text[], size_t text_size, clockid_t clock_id)
 {
     struct timespec    ts;
+    char               formatted[P101_NUMBER_BUF_LEN];
     unsigned long long seconds;
     unsigned long long nanoseconds;
+    size_t             index;
 
     if(text_size == 0U)
     {
         return;
     }
+    text[0] = '\0';
 
     if(clock_gettime(clock_id, &ts) != 0)
     {
-        text[0] = '-';
         if(text_size > 1U)
         {
+            text[0] = '-';
             text[1] = '\0';
         }
         return;
@@ -1367,7 +1370,15 @@ static void p101_env_timestamp_text(char text[], size_t text_size, clockid_t clo
 
     seconds     = (unsigned long long)ts.tv_sec;
     nanoseconds = (seconds * P101_NANOSECONDS_PER_SECOND) + (unsigned long long)ts.tv_nsec;
-    snprintf(text, text_size, "%llu", nanoseconds);    // NOLINT(cert-err33-c)
+    snprintf(formatted, sizeof(formatted), "%llu", nanoseconds);    // NOLINT(cert-err33-c)
+
+    index = 0U;
+    while((index + 1U) < text_size && formatted[index] != '\0')
+    {
+        text[index] = formatted[index];
+        index++;
+    }
+    text[index] = '\0';
 }
 
 static void p101_env_log_append_event_prefix(const struct p101_env *env, char line[], size_t line_size, size_t *offset, const char *magic, long pid)
