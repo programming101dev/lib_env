@@ -26,24 +26,18 @@ lang="C"
 [ -f config.cmake ] && lang="$(sed -n 's/.*set(PROJECT_LANGUAGE[[:space:]]*"\{0,1\}\([A-Za-z]*\).*/\1/p' config.cmake | head -1)"
 if [ "$lang" = "CXX" ] || [ "$lang" = "CPP" ]; then
   clist="$(names_from "$(find_list supported_cxx_compilers.txt)")"
-  xlist="$(names_from "$(find_list supported_cxx_compilers.txt)")"
 else
   clist="$(names_from "$(find_list supported_c_compilers.txt)")"
-  xlist="$(names_from "$(find_list supported_cxx_compilers.txt)")"
 fi
 [ -n "$clist" ] || { echo "No supported compiler list found." >&2; exit 1; }
 
-# pair C compilers with their C++ partner by position (for -x)
-set -- $xlist; xarr="$*"
-i=0; pass=0; fail=0; failed=""
+pass=0; fail=0; failed=""
 for cc in $clist; do
-  i=$((i+1))
-  cxx="$(echo $xarr | cut -d' ' -f$i)"
   echo "==================================================================="
-  echo ">> compiler: $cc${cxx:+  (c++: $cxx)}"
+  echo ">> compiler: $cc"
   echo "==================================================================="
   if ! command -v "$cc" >/dev/null 2>&1; then echo "   (skip: $cc not on PATH)"; continue; fi
-  if ./change-compiler.sh -c "$cc" ${cxx:+-x "$cxx"} >/dev/null 2>&1; then
+  if ./change-compiler.sh -c "$cc" >/dev/null 2>&1; then
     if ./test.sh ${cov:+$cov}; then pass=$((pass+1)); else fail=$((fail+1)); failed="$failed $cc"; fi
   else
     echo "   (configure failed for $cc)"; fail=$((fail+1)); failed="$failed $cc"

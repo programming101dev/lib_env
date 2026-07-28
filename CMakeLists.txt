@@ -96,7 +96,7 @@ execute_process(
 if (_P101_CPPCHECK_VERSION_RC EQUAL 0)
     string(REGEX MATCH "[0-9]+\\.[0-9]+(\\.[0-9]+)?" _P101_CPPCHECK_VERSION "${_P101_CPPCHECK_VERSION_TEXT}")
     if (_P101_CPPCHECK_VERSION VERSION_LESS "2.14")
-        message(WARNING "cppcheck ${_P101_CPPCHECK_VERSION} is older than the p101 known-good floor 2.14; self-diagnostics will be logged but filtered from the fatal gate.")
+        message(WARNING "cppcheck ${_P101_CPPCHECK_VERSION} is older than the p101 known-good floor 2.14; upgrade cppcheck if older-version self-diagnostics appear.")
     endif ()
 else ()
     message(WARNING "Could not determine cppcheck version: ${_P101_CPPCHECK_VERSION_ERROR}")
@@ -241,7 +241,16 @@ set(_FLAG_DIRS_USED "")
 if (EXISTS "${_FLAGS_ROOT}/${_CC_BASE}")
     set(_FLAG_DIRS_USED "${_FLAGS_ROOT}/${_CC_BASE}")
 else ()
-    message(STATUS "No flags dir for ${_CC_BASE}; no compiler flags will be loaded.")
+    if (DEFINED ENV{P101_ALLOW_NO_FLAGS}
+            AND NOT "$ENV{P101_ALLOW_NO_FLAGS}" STREQUAL ""
+            AND NOT "$ENV{P101_ALLOW_NO_FLAGS}" STREQUAL "0")
+        message(WARNING "No flags dir for ${_CC_BASE}; P101_ALLOW_NO_FLAGS is set, so no compiler flags will be loaded.")
+    else ()
+        message(FATAL_ERROR
+                "No flags dir for ${_CC_BASE} under ${_FLAGS_ROOT}. "
+                "Run scripts/update.sh or scripts/generate-flags.sh for this compiler, "
+                "or set P101_ALLOW_NO_FLAGS=1 for an explicit flagless bring-up build.")
+    endif ()
 endif ()
 
 # One-off flagless build: P101_NO_FLAGS in the ENVIRONMENT (set by
@@ -502,6 +511,7 @@ set(_P101_WORKSPACE_ROOT_CANDIDATES
 )
 set(_P101_LOCAL_INCLUDE_DIRS "")
 set(_P101_LOCAL_LINK_DIRS "")
+set(_P101_LOCAL_FALLBACK_LINK_DIRS "")
 get_filename_component(_P101_COMPILER_BASENAME "${CMAKE_C_COMPILER}" NAME)
 foreach (_p101_root IN LISTS _P101_WORKSPACE_ROOT_CANDIDATES)
     get_filename_component(_p101_root_abs "${_p101_root}" ABSOLUTE)
@@ -526,7 +536,7 @@ foreach (_p101_root IN LISTS _P101_WORKSPACE_ROOT_CANDIDATES)
             list(SORT _p101_library_build_dirs)
             foreach (_p101_library_build_dir IN LISTS _p101_library_build_dirs)
                 if (IS_DIRECTORY "${_p101_library_build_dir}")
-                    list(APPEND _P101_LOCAL_LINK_DIRS "${_p101_library_build_dir}")
+                    list(APPEND _P101_LOCAL_FALLBACK_LINK_DIRS "${_p101_library_build_dir}")
                 endif ()
             endforeach ()
         endforeach ()
@@ -534,6 +544,9 @@ foreach (_p101_root IN LISTS _P101_WORKSPACE_ROOT_CANDIDATES)
     endif ()
 endforeach ()
 list(REMOVE_DUPLICATES _P101_LOCAL_INCLUDE_DIRS)
+list(REMOVE_DUPLICATES _P101_LOCAL_LINK_DIRS)
+list(REMOVE_DUPLICATES _P101_LOCAL_FALLBACK_LINK_DIRS)
+list(APPEND _P101_LOCAL_LINK_DIRS ${_P101_LOCAL_FALLBACK_LINK_DIRS})
 list(REMOVE_DUPLICATES _P101_LOCAL_LINK_DIRS)
 
 set(_INC_CANDIDATES
@@ -596,6 +609,21 @@ foreach (_d IN LISTS _LOCAL_INC_DIRS)
     list(REMOVE_ITEM _EXT_INC_DIRS "${_d}")
 endforeach ()
 list(REMOVE_DUPLICATES _EXT_INC_DIRS)
+
+# CMake's IMPLICIT_DEPENDS scanner used by the per-TU static-analyzer custom
+# commands only sees directory-scoped include paths. Keep the target-scoped
+# include_directories below for correct public/private usage, but mirror the
+# same search paths at directory scope so editing a project header causes the
+# static analyzer stamp to rebuild.
+if (P101_PROJECT_INC_DIR)
+    include_directories("${P101_PROJECT_INC_DIR}")
+endif ()
+if (_LOCAL_INC_DIRS)
+    include_directories(${_LOCAL_INC_DIRS})
+endif ()
+if (_EXT_INC_DIRS)
+    include_directories(SYSTEM ${_EXT_INC_DIRS})
+endif ()
 
 # Prebuild convenience strings for custom commands (best-effort; used only for echo lines)
 set(_MAC_SYSROOT_CMD "")
@@ -1408,9 +1436,10 @@ if (_COMPILER_ID MATCHES "Clang" AND NOT P101_IS_RASPBERRY_PI)
                 COMMAND /bin/sh -c
                 "\"${_COMPILER}\" ${_SA_STD} ${_P101_SA_DEFS_CMD} ${_SA_FLAGS_CMD} ${_SA_ARGS_CMD} \
                    ${_PROJ_I_CMD} ${_LOCAL_I_CMD} ${_EXT_ISYSTEM_CMD} ${_MAC_SYSROOT_CMD} \
-                   \"${_abs}\" > \"${_out}\" 2>&1 || true"
+                   \"${_abs}\" > \"${_out}\" 2>&1"
                 COMMAND ${CMAKE_COMMAND} -E touch "${_stamp}"
                 DEPENDS "${_abs}"
+                IMPLICIT_DEPENDS C "${_abs}"
                 VERBATIM
         )
         list(APPEND _SA_STAMPS "${_stamp}")
