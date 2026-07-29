@@ -115,7 +115,8 @@ extern "C"
 
     /*
      * Shared event-log input primitive for tools that consume P101FD,
-     * P101ALLOC, P101FORK, P101EXEC, P101CALL, and future p101 event records.
+     * P101ALLOC, P101FORK, P101EXEC, P101EXECFAIL, P101CALL, and future p101
+     * event records.
      *
      * It reads one physical line from stream into line, always NUL-terminates
      * when line_size is non-zero, and treats embedded NUL bytes or lines that do
@@ -163,7 +164,9 @@ extern "C"
         P101_ENV_EVENT_RECORD_FD = 0,
         P101_ENV_EVENT_RECORD_ALLOC,
         P101_ENV_EVENT_RECORD_FORK,
+        P101_ENV_EVENT_RECORD_SPAWN,
         P101_ENV_EVENT_RECORD_EXEC,
+        P101_ENV_EVENT_RECORD_EXEC_FAIL,
         P101_ENV_EVENT_RECORD_CALL
     } p101_env_event_record_kind;
 
@@ -201,18 +204,20 @@ extern "C"
         p101_env_event_fd_kind     fd_kind;
         p101_env_event_alloc_kind  alloc_kind;
         p101_env_event_call_kind   call_kind;
-        const char                *ptr;     /* points into the line buffer */
-        const char                *new_ptr; /* points into the line buffer, or NULL */
-        const char                *target;  /* points into the line buffer */
+        char                      *ptr;     /* points into the mutable line buffer */
+        char                      *new_ptr; /* points into the mutable line buffer, or NULL */
+        char                      *target;  /* points into the mutable line buffer */
         size_t                     size;
         int                        line_number;
-        const char                *function_name; /* points into the line buffer */
-        const char                *call_name;     /* points into the line buffer */
-        const char                *arguments;     /* points into the line buffer */
-        const char                *result;        /* points into the line buffer */
-        const char                *file_name;     /* points into the line buffer */
+        char                      *function_name; /* points into the mutable line buffer */
+        char                      *call_name;     /* points into the mutable line buffer */
+        char                      *arguments;     /* points into the mutable line buffer */
+        char                      *result;        /* points into the mutable line buffer */
+        char                      *file_name;     /* points into the mutable line buffer */
     };
 
+    /* Splits and unescapes recognized records in place. String members in
+     * record point into line and remain valid only while that buffer lives. */
     p101_env_event_parse_status p101_env_parse_event_line(char *line, struct p101_env_event_record *record);
     int                         p101_env_event_line_is_ours(const char *line);
     char                       *p101_env_event_split(char **cursor);
@@ -299,27 +304,34 @@ extern "C"
      * The convenience sink built on that observer: one line per event, in the
      * format the resource-tracker analyzer reads.
      *
-     *     P101FD<TAB>1<TAB>pid<TAB>OPEN|CLOSE<TAB>fd<TAB>line<TAB>function<TAB>file
-     *     P101FORK<TAB>1<TAB>parent-pid<TAB>child-pid<TAB>line<TAB>function<TAB>file
-     *     P101EXEC<TAB>1<TAB>pid<TAB>fd<TAB>cloexec<TAB>line<TAB>function<TAB>file<TAB>target
+     *     P101FD<TAB>2<TAB>pid<TAB>seq<TAB>mono_ns<TAB>wall_ns<TAB>OPEN|CLOSE<TAB>fd<TAB>line<TAB>function<TAB>file
+     *     P101FORK<TAB>2<TAB>parent-pid<TAB>seq<TAB>mono_ns<TAB>wall_ns<TAB>child-pid<TAB>line<TAB>function<TAB>file
+     *     P101SPAWN<TAB>2<TAB>parent-pid<TAB>seq<TAB>mono_ns<TAB>wall_ns<TAB>child-pid<TAB>line<TAB>function<TAB>file<TAB>target
+     *     P101EXEC<TAB>2<TAB>pid<TAB>seq<TAB>mono_ns<TAB>wall_ns<TAB>fd<TAB>cloexec<TAB>line<TAB>function<TAB>file<TAB>target
+     *     P101EXECFAIL<TAB>2<TAB>pid<TAB>seq<TAB>mono_ns<TAB>wall_ns<TAB>line<TAB>function<TAB>file<TAB>target
      *
-     * The P101FD magic means the log can share a stream with ordinary output
-     * and still be grepped back out; the 1 is a format version; the free-form
-     * file name comes last so nothing after it can be mistaken for a field.
+     * The P101 record prefixes let the log share a stream with ordinary output
+     * and still be grepped back out; the 2 is the supported format version.
+     * Free-form fields are escaped so embedded tabs and newlines cannot change
+     * the record shape.
      * Each line is a single fwrite() followed by a flush, so the log survives a
      * crash and a fork does not split a line in half -- and because the pid is
      * on every line, the analyzer can tell the child's descriptors from the
      * parent's. The fork record lets an analyzer seed the child's descriptor
-     * table from the descriptors live in the parent at fork time. The exec
-     * record snapshots every open descriptor at an exec boundary with its
-     * FD_CLOEXEC state, so an offline analyzer can explain which tracked
-     * descriptors would cross into the new program image. Passing NULL removes
-     * the sink. The stream is NOT closed by p101_env_destroy(); the caller owns
-     * it.
+     * table from the descriptors live in the parent at fork time. A spawn
+     * record preserves the parent, child, target, and source boundary without
+     * claiming to reconstruct opaque spawn file actions. The exec record scans
+     * the process descriptor range at an exec boundary and records every open
+     * descriptor it finds with its FD_CLOEXEC state, so an offline analyzer can
+     * explain which tracked descriptors would cross into the new program
+     * image. Passing NULL removes the sink. The stream is NOT closed by
+     * p101_env_destroy(); the caller owns it.
      */
     void p101_env_set_fd_log(struct p101_env *env, FILE *stream);
     void p101_env_track_fork(const struct p101_env *env, long parent_pid, long child_pid, const char *file_name, const char *function_name, int line_number);
+    void p101_env_track_spawn(const struct p101_env *env, long parent_pid, long child_pid, const char *target, const char *file_name, const char *function_name, int line_number);
     void p101_env_track_exec(const struct p101_env *env, const char *target, const char *file_name, const char *function_name, int line_number);
+    void p101_env_track_exec_failure(const struct p101_env *env, const char *target, const char *file_name, const char *function_name, int line_number);
 
     /*
      * Allocation event observer. Like the fd observer, this is best-effort
@@ -348,7 +360,9 @@ extern "C"
 #define P101_TRACK_OPEN(env, fd) p101_env_track_open((env), (fd), __FILE__, __func__, __LINE__)
 #define P101_TRACK_CLOSE(env, fd) p101_env_track_close((env), (fd), __FILE__, __func__, __LINE__)
 #define P101_TRACK_FORK(env, parent_pid, child_pid) p101_env_track_fork((env), (parent_pid), (child_pid), __FILE__, __func__, __LINE__)
+#define P101_TRACK_SPAWN(env, parent_pid, child_pid, target) p101_env_track_spawn((env), (parent_pid), (child_pid), (target), __FILE__, __func__, __LINE__)
 #define P101_TRACK_EXEC(env, target) p101_env_track_exec((env), (target), __FILE__, __func__, __LINE__)
+#define P101_TRACK_EXEC_FAILURE(env, target) p101_env_track_exec_failure((env), (target), __FILE__, __func__, __LINE__)
 #define P101_TRACK_ALLOC(env, ptr, size) p101_env_track_alloc((env), (ptr), (size), __FILE__, __func__, __LINE__)
 #define P101_TRACK_FREE(env, ptr) p101_env_track_free((env), (ptr), __FILE__, __func__, __LINE__)
 #define P101_TRACK_REALLOC(env, ptr, new_ptr, size) p101_env_track_realloc((env), (ptr), (new_ptr), (size), __FILE__, __func__, __LINE__)

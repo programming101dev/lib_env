@@ -71,7 +71,9 @@ This compiles through the strict analysis pipeline: the clang-format check, clan
 ## **Testing**
 
 `./check.sh` is the one command to run before you submit: the format check, the strict build, the tests, and a short fuzz smoke run, with a single PASS/FAIL at the end.
-This library does not have a `test/` tree yet, so `./test.sh` reports that and exits; the rest of the gate still runs.
+The test tree covers v2 parsing, escaped-field round trips, long records, reader
+errors, duplicated log destinations, and independent resource observers. The
+fuzz harness feeds arbitrary records through the shared event parser.
 
 ## **Tracing and structured call logs**
 

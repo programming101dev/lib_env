@@ -1,7 +1,7 @@
 # Project metadata
 set(PROJECT_NAME "p101_env")
 set(PROJECT_VERSION "0.0.1")
-set(PROJECT_DESCRIPTION "Environment variable utilities")
+set(PROJECT_DESCRIPTION "Runtime environment, tracing, fault injection, and event logging")
 set(PROJECT_LANGUAGE "C")
 
 set(CMAKE_C_STANDARD 17)
