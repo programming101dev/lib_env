@@ -19,6 +19,7 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -45,18 +46,25 @@ struct p101_fd_ledger
 
 struct p101_env_fault_state
 {
-    unsigned long target_call;
-    unsigned long calls_seen;
-    int           errnum;
-    char         *call_name;
-    FILE         *log_stream;
-    char         *log_path;
-    int           log_owned;
+    unsigned long       target_call;
+    atomic_ulong        calls_seen;
+    unsigned long       repeat;
+    int                 errnum;
+    p101_env_fault_kind kind;
+    const char         *mode_name;
+    size_t              amount;
+    char               *call_name;
+    FILE               *log_stream;
+    char               *log_path;
+    int                 log_owned;
 };
 
 struct p101_env_event_state
 {
-    unsigned long long next_sequence;
+    unsigned long long context_id;
+    atomic_ullong      next_sequence;
+    atomic_int         write_failed;
+    atomic_int         write_errno;
 };
 
 struct p101_env
@@ -72,6 +80,8 @@ struct p101_env
     void                        *fd_observer_data; /* non-owned; state for the observer */
     p101_env_alloc_observer      alloc_observer;
     void                        *alloc_observer_data; /* non-owned; state for the observer */
+    p101_env_resource_observer   resource_observer;
+    void                        *resource_observer_data; /* non-owned; state for the observer */
     p101_env_call_observer       call_observer;
     void                        *call_observer_data; /* non-owned; state for the observer */
     unsigned                     call_log_options;
@@ -86,16 +96,12 @@ struct p101_env
 
 enum
 {
-    P101_EVENT_LOG_FIXED_SIZE   = 512,
-    P101_CALL_LOG_FIELD_COUNT   = 5,
-    P101_NUMBER_BUF_LEN         = 64,
-    P101_POINTER_BUF_LEN        = 64,
-    P101_NANOSECONDS_PER_SECOND = 1000000000,
-    P101_ASCII_DELETE           = 0x7F,
-    P101_ENV_NUMBER_BASE        = 10,
-    P101_EXEC_SCAN_FD_FALLBACK  = 65536,
-    P101_EVENT_PARSE_FD_MAX     = 1048576,
-    P101_DEFAULT_FAULT_ERRNO    = EIO
+    P101_POINTER_BUF_LEN         = 64,
+    P101_NANOSECONDS_PER_SECOND  = 1000000000,
+    P101_ENV_NUMBER_BASE         = 10,
+    P101_EXEC_SCAN_FD_FALLBACK   = 65536,
+    P101_TOOL_EVENT_PARSE_FD_MAX = 1048576,
+    P101_DEFAULT_FAULT_ERRNO     = EIO
 };
 
 static void                         p101_env_init(struct p101_env *env, p101_env_tracer tracer);
@@ -105,7 +111,7 @@ static void                         p101_env_configure_event_log_version_from_en
 static void                         p101_env_configure_fault_from_environment(struct p101_env *env, struct p101_error *err);
 static void                         p101_env_configure_fd_log_from_environment(struct p101_env *env, struct p101_error *err);
 static void                         p101_env_configure_call_log_from_environment(struct p101_env *env, struct p101_error *err);
-static void                         p101_env_configure_resource_log_path(struct p101_env *env, struct p101_error *err, const char *path, int enable_fd, int enable_alloc);
+static void                         p101_env_configure_resource_log_path(struct p101_env *env, struct p101_error *err, const char *path, int enable_fd, int enable_alloc, int enable_resource);
 static void                         p101_env_configure_call_log_path(struct p101_env *env, struct p101_error *err, const char *path, unsigned options);
 static FILE                        *p101_env_open_log_from_environment(struct p101_error *err, const char *path, int *owned);
 static char                        *p101_env_copy_text(struct p101_error *err, const char *text);
@@ -114,16 +120,18 @@ static void                         p101_env_close_owned_resource_log_if_unused(
 static void                         p101_env_close_owned_call_log(struct p101_env *env);
 static struct p101_env_fault_state *p101_env_fault_state_dup(struct p101_error *err, const struct p101_env_fault_state *source);
 static void                         p101_env_fault_state_destroy(struct p101_env_fault_state *state);
-static void                         p101_env_log_fault_hit(const struct p101_env_fault_state *state, const char *call_name);
+static void                         p101_env_log_fault_hit(const struct p101_env *env, const struct p101_env_fault_state *state, const char *call_name);
 static int                          p101_env_environment_fault_injector(const struct p101_env *env, const char *call_name, void *user_data);
+static int                          p101_env_environment_fault_action(const struct p101_env *env, const char *call_name, void *user_data, struct p101_env_fault_action *action);
 static unsigned long                p101_env_parse_unsigned_environment(const char *text, unsigned long default_value, int *ok);
 static int                          p101_env_parse_int_environment(const char *text, int default_value, int *ok);
 static int                          p101_env_flag_on(const char *name, int default_value);
 static int                          p101_env_supported_event_log_version(long version);
 static int                          p101_env_effective_event_log_version(const struct p101_env *env);
 static unsigned long long           p101_env_next_event_sequence(const struct p101_env *env);
-static void                         p101_env_timestamp_text(char text[], size_t text_size, clockid_t clock_id);
-static void                         p101_env_log_append_event_prefix(const struct p101_env *env, char line[], size_t line_size, size_t *offset, const char *magic, long pid);
+static void                         p101_env_prepare_event_record(const struct p101_env *env, struct p101_tool_event_output *record, p101_tool_event_record_kind kind, long pid);
+static void                         p101_env_record_event_write_failure(const struct p101_env *env);
+static void                         p101_env_write_event(const struct p101_env *env, FILE *stream, const struct p101_tool_event_output *record);
 static void                         p101_env_fd_notify(const struct p101_env *env, p101_env_fd_event event, int fd, const char *file_name, const char *function_name, int line_number);
 static void                         p101_env_fd_log_observer(const struct p101_env *env, p101_env_fd_event event, int fd, const char *file_name, const char *function_name, int line_number, void *user_data);
 static void                         p101_env_fork_log(const struct p101_env *env, FILE *stream, long parent_pid, long child_pid, const char *file_name, const char *function_name, int line_number);
@@ -133,25 +141,12 @@ static void                         p101_env_exec_fd_log(const struct p101_env *
 static void                         p101_env_exec_failure_log(const struct p101_env *env, FILE *stream, const char *target, const char *file_name, const char *function_name, int line_number);
 static void                         p101_env_alloc_notify(const struct p101_env *env, p101_env_alloc_event event, const void *ptr, const void *new_ptr, size_t size, const char *file_name, const char *function_name, int line_number);
 static void                         p101_env_alloc_log_observer(const struct p101_env *env, p101_env_alloc_event event, const void *ptr, const void *new_ptr, size_t size, const char *file_name, const char *function_name, int line_number, void *user_data);
-static const char                  *p101_env_alloc_event_name(p101_env_alloc_event event);
-static void                         p101_env_call_notify(const struct p101_env *env, p101_env_call_event event, const char *call_name, const char *arguments, const char *result, const char *file_name, const char *function_name, int line_number);
-static void   p101_env_call_log_observer(const struct p101_env *env, p101_env_call_event event, const char *call_name, const char *arguments, const char *result, const char *file_name, const char *function_name, int line_number, void *user_data);
-static void   p101_env_log_append_char(char line[], size_t line_size, size_t *offset, char ch);
-static void   p101_env_log_append_text(char line[], size_t line_size, size_t *offset, const char *text);
-static void   p101_env_log_append_field(char line[], size_t line_size, size_t *offset, const char *text);
-static size_t p101_env_log_finish_record(char line[], size_t line_size, size_t offset);
-static char  *p101_env_log_buffer_create(const char *const fields[], size_t field_count, size_t *line_size);
-static void   p101_env_event_unescape_char(char **read_cursor, char **write_cursor);
-static int    p101_env_event_parse_long_field(const char *text, long min, long max, long *out);
-static int    p101_env_event_parse_optional_size_field(const char *text, size_t *out, int *available);
-static p101_env_event_parse_status p101_env_event_parse_version_metadata(char **cursor, struct p101_env_event_record *record);
-static p101_env_event_parse_status p101_env_event_parse_fd(char *line, struct p101_env_event_record *record);
-static p101_env_event_parse_status p101_env_event_parse_alloc(char *line, struct p101_env_event_record *record);
-static p101_env_event_parse_status p101_env_event_parse_fork(char *line, struct p101_env_event_record *record);
-static p101_env_event_parse_status p101_env_event_parse_spawn(char *line, struct p101_env_event_record *record);
-static p101_env_event_parse_status p101_env_event_parse_exec(char *line, struct p101_env_event_record *record);
-static p101_env_event_parse_status p101_env_event_parse_exec_failure(char *line, struct p101_env_event_record *record);
-static p101_env_event_parse_status p101_env_event_parse_call(char *line, struct p101_env_event_record *record);
+static void p101_env_resource_log_observer(const struct p101_env *env, p101_tool_event_resource_kind event, const char *resource_class, const char *resource_id, const char *related_id, size_t size, const char *metadata, const char *file_name,
+                                           const char *function_name, int line_number, void *user_data);
+static void p101_env_call_notify(const struct p101_env *env, p101_env_call_event event, const char *call_name, const char *arguments, const char *result, const char *file_name, const char *function_name, int line_number);
+static void p101_env_call_log_observer(const struct p101_env *env, p101_env_call_event event, const char *call_name, const char *arguments, const char *result, const char *file_name, const char *function_name, int line_number, void *user_data);
+
+static atomic_ullong p101_env_next_context_id = 0;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 
 struct p101_env *p101_env_create(struct p101_error *err, p101_env_tracer tracer)
 {
@@ -226,10 +221,12 @@ struct p101_env *p101_env_dup(struct p101_error *err, const struct p101_env *env
         new_env->fault_data     = env->fault_data;
 
         /* The observer IS inherited -- a log is a destination, not state. */
-        new_env->fd_observer         = env->fd_observer;
-        new_env->fd_observer_data    = env->fd_observer_data;
-        new_env->alloc_observer      = env->alloc_observer;
-        new_env->alloc_observer_data = env->alloc_observer_data;
+        new_env->fd_observer            = env->fd_observer;
+        new_env->fd_observer_data       = env->fd_observer_data;
+        new_env->alloc_observer         = env->alloc_observer;
+        new_env->alloc_observer_data    = env->alloc_observer_data;
+        new_env->resource_observer      = env->resource_observer;
+        new_env->resource_observer_data = env->resource_observer_data;
 
         /* The structured call observer is also a destination and is inherited. */
         new_env->call_observer         = env->call_observer;
@@ -253,10 +250,12 @@ struct p101_env *p101_env_dup(struct p101_error *err, const struct p101_env *env
         {
             int enable_fd;
             int enable_alloc;
+            int enable_resource;
 
-            enable_fd    = (env->fd_observer == p101_env_fd_log_observer && env->fd_observer_data == env->owned_fd_log_stream) ? 1 : 0;
-            enable_alloc = (env->alloc_observer == p101_env_alloc_log_observer && env->alloc_observer_data == env->owned_fd_log_stream) ? 1 : 0;
-            p101_env_configure_resource_log_path(new_env, err, env->owned_fd_log_path, enable_fd, enable_alloc);
+            enable_fd       = (env->fd_observer == p101_env_fd_log_observer && env->fd_observer_data == env->owned_fd_log_stream) ? 1 : 0;
+            enable_alloc    = (env->alloc_observer == p101_env_alloc_log_observer && env->alloc_observer_data == env->owned_fd_log_stream) ? 1 : 0;
+            enable_resource = (env->resource_observer == p101_env_resource_log_observer && env->resource_observer_data == env->owned_fd_log_stream) ? 1 : 0;
+            p101_env_configure_resource_log_path(new_env, err, env->owned_fd_log_path, enable_fd, enable_alloc, enable_resource);
         }
 
         if(env->owned_call_log_stream != NULL)
@@ -276,6 +275,17 @@ struct p101_env *p101_env_dup(struct p101_error *err, const struct p101_env *env
 
 void p101_env_destroy(struct p101_env *env)
 {
+    if(p101_env_event_log_failed(env))
+    {
+        int write_error;
+
+        write_error = p101_env_event_log_errno(env);
+        flockfile(stderr);
+        fprintf(stderr, "p101 instrumentation log is incomplete: write failed with errno %d\n", write_error);    // NOLINT(cert-err33-c)
+        fflush(stderr);                                                                                          // NOLINT(cert-err33-c)
+        funlockfile(stderr);
+    }
+
     if(env != NULL && env->fd_ledger != NULL)
     {
         struct p101_fd_record *cur = env->fd_ledger->head;
@@ -312,27 +322,29 @@ void p101_env_destroy(struct p101_env *env)
 
 static void p101_env_init(struct p101_env *env, p101_env_tracer tracer)
 {
-    env->tracer                = tracer;
-    env->exit_tracer           = NULL;
-    env->tracer_data           = NULL;
-    env->label                 = NULL;
-    env->fault_injector        = NULL;
-    env->fault_data            = NULL;
-    env->fd_ledger             = NULL;
-    env->fd_observer           = NULL;
-    env->fd_observer_data      = NULL;
-    env->alloc_observer        = NULL;
-    env->alloc_observer_data   = NULL;
-    env->call_observer         = NULL;
-    env->call_observer_data    = NULL;
-    env->call_log_options      = P101_ENV_CALL_LOG_DEFAULT;
-    env->event_log_version     = P101_ENV_EVENT_LOG_VERSION_2;
-    env->event_state           = NULL;
-    env->owned_fd_log_stream   = NULL;
-    env->owned_fd_log_path     = NULL;
-    env->owned_call_log_stream = NULL;
-    env->owned_call_log_path   = NULL;
-    env->owned_fault_state     = NULL;
+    env->tracer                 = tracer;
+    env->exit_tracer            = NULL;
+    env->tracer_data            = NULL;
+    env->label                  = NULL;
+    env->fault_injector         = NULL;
+    env->fault_data             = NULL;
+    env->fd_ledger              = NULL;
+    env->fd_observer            = NULL;
+    env->fd_observer_data       = NULL;
+    env->alloc_observer         = NULL;
+    env->alloc_observer_data    = NULL;
+    env->resource_observer      = NULL;
+    env->resource_observer_data = NULL;
+    env->call_observer          = NULL;
+    env->call_observer_data     = NULL;
+    env->call_log_options       = P101_ENV_CALL_LOG_DEFAULT;
+    env->event_log_version      = P101_TOOL_EVENT_LOG_VERSION_3;
+    env->event_state            = NULL;
+    env->owned_fd_log_stream    = NULL;
+    env->owned_fd_log_path      = NULL;
+    env->owned_call_log_stream  = NULL;
+    env->owned_call_log_path    = NULL;
+    env->owned_fault_state      = NULL;
 }
 
 static void p101_env_init_event_state(struct p101_env *env, struct p101_error *err)
@@ -345,7 +357,10 @@ static void p101_env_init_event_state(struct p101_env *env, struct p101_error *e
         return;
     }
 
-    env->event_state->next_sequence = 0ULL;
+    env->event_state->context_id = atomic_fetch_add_explicit(&p101_env_next_context_id, 1ULL, memory_order_relaxed) + 1ULL;
+    atomic_init(&env->event_state->next_sequence, 0ULL);
+    atomic_init(&env->event_state->write_failed, 0);
+    atomic_init(&env->event_state->write_errno, 0);
 }
 
 static void p101_env_configure_from_environment(struct p101_env *env, struct p101_error *err)
@@ -380,14 +395,14 @@ static void p101_env_configure_event_log_version_from_environment(struct p101_en
     int         version;
     int         ok;
 
-    version_text = getenv("P101_EVENT_LOG_VERSION");
+    version_text = getenv("P101_TOOL_EVENT_LOG_VERSION");
 
     if(version_text == NULL || version_text[0] == '\0')
     {
         return;
     }
 
-    version = p101_env_parse_int_environment(version_text, P101_ENV_EVENT_LOG_VERSION_2, &ok);
+    version = p101_env_parse_int_environment(version_text, P101_TOOL_EVENT_LOG_VERSION_3, &ok);
 
     if(!ok || !p101_env_supported_event_log_version(version))
     {
@@ -403,11 +418,16 @@ static void p101_env_configure_fault_from_environment(struct p101_env *env, stru
     const char                  *target_text;
     const char                  *errnum_text;
     const char                  *log_text;
+    const char                  *mode_text;
+    const char                  *amount_text;
+    const char                  *repeat_text;
     struct p101_env_fault_state *state;
     unsigned long                target_call;
     int                          fault_errno;
     int                          log_owned;
     int                          ok;
+    unsigned long                amount;
+    unsigned long                repeat;
 
     target_text = getenv("P101_FAULT_CALL");
 
@@ -445,12 +465,68 @@ static void p101_env_configure_fault_from_environment(struct p101_env *env, stru
     }
 
     state->target_call = target_call;
-    state->calls_seen  = 0;
-    state->errnum      = fault_errno;
-    state->call_name   = NULL;
-    state->log_stream  = NULL;
-    state->log_path    = NULL;
-    state->log_owned   = 0;
+    atomic_init(&state->calls_seen, 0UL);
+    state->repeat     = 1UL;
+    state->errnum     = fault_errno;
+    state->kind       = P101_ENV_FAULT_ERROR;
+    state->mode_name  = "error";
+    state->amount     = 1U;
+    state->call_name  = NULL;
+    state->log_stream = NULL;
+    state->log_path   = NULL;
+    state->log_owned  = 0;
+
+    mode_text = getenv("P101_FAULT_MODE");
+    if(mode_text != NULL && mode_text[0] != '\0')
+    {
+        if(strcmp(mode_text, "error") == 0)
+        {
+            state->kind = P101_ENV_FAULT_ERROR;
+        }
+        else if(strcmp(mode_text, "eintr") == 0)
+        {
+            state->kind      = P101_ENV_FAULT_ERROR;
+            state->errnum    = EINTR;
+            state->mode_name = "eintr";
+        }
+        else if(strcmp(mode_text, "timeout") == 0)
+        {
+            state->kind      = P101_ENV_FAULT_ERROR;
+            state->errnum    = ETIMEDOUT;
+            state->mode_name = "timeout";
+        }
+        else if(strcmp(mode_text, "short") == 0)
+        {
+            state->kind      = P101_ENV_FAULT_SHORT;
+            state->mode_name = "short";
+        }
+        else
+        {
+            P101_ERROR_RAISE_ERRNO(err, EINVAL);
+            p101_env_fault_state_destroy(state);
+            return;
+        }
+    }
+
+    amount_text = getenv("P101_FAULT_AMOUNT");
+    amount      = p101_env_parse_unsigned_environment(amount_text, 1UL, &ok);
+    if(!ok)
+    {
+        P101_ERROR_RAISE_ERRNO(err, EINVAL);
+        p101_env_fault_state_destroy(state);
+        return;
+    }
+    state->amount = (size_t)amount;
+
+    repeat_text = getenv("P101_FAULT_REPEAT");
+    repeat      = p101_env_parse_unsigned_environment(repeat_text, 1UL, &ok);
+    if(!ok || repeat == 0UL)
+    {
+        P101_ERROR_RAISE_ERRNO(err, EINVAL);
+        p101_env_fault_state_destroy(state);
+        return;
+    }
+    state->repeat = repeat;
 
     target_text = getenv("P101_FAULT_NAME");
     if(target_text != NULL && target_text[0] != '\0')
@@ -503,7 +579,7 @@ static void p101_env_configure_fd_log_from_environment(struct p101_env *env, str
         return;
     }
 
-    p101_env_configure_resource_log_path(env, err, path, 1, 1);
+    p101_env_configure_resource_log_path(env, err, path, 1, 1, 1);
 }
 
 static void p101_env_configure_call_log_from_environment(struct p101_env *env, struct p101_error *err)
@@ -543,13 +619,13 @@ static void p101_env_configure_call_log_from_environment(struct p101_env *env, s
     p101_env_configure_call_log_path(env, err, path, options);
 }
 
-static void p101_env_configure_resource_log_path(struct p101_env *env, struct p101_error *err, const char *path, int enable_fd, int enable_alloc)
+static void p101_env_configure_resource_log_path(struct p101_env *env, struct p101_error *err, const char *path, int enable_fd, int enable_alloc, int enable_resource)
 {
     FILE *stream;
     char *path_copy;
     int   owned;
 
-    if(path == NULL || (!enable_fd && !enable_alloc))
+    if(path == NULL || (!enable_fd && !enable_alloc && !enable_resource))
     {
         return;
     }
@@ -584,6 +660,12 @@ static void p101_env_configure_resource_log_path(struct p101_env *env, struct p1
     {
         env->alloc_observer      = p101_env_alloc_log_observer;
         env->alloc_observer_data = stream;
+    }
+
+    if(enable_resource)
+    {
+        env->resource_observer      = p101_env_resource_log_observer;
+        env->resource_observer_data = stream;
     }
 }
 
@@ -688,6 +770,12 @@ static void p101_env_close_owned_resource_log(struct p101_env *env)
         env->alloc_observer_data = NULL;
     }
 
+    if(env->resource_observer_data == stream)
+    {
+        env->resource_observer      = NULL;
+        env->resource_observer_data = NULL;
+    }
+
     fclose(stream);    // NOLINT(cert-err33-c)
     env->owned_fd_log_stream = NULL;
     free(env->owned_fd_log_path);
@@ -704,7 +792,7 @@ static void p101_env_close_owned_resource_log_if_unused(struct p101_env *env)
     }
 
     stream = env->owned_fd_log_stream;
-    if(env->fd_observer_data == stream || env->alloc_observer_data == stream)
+    if(env->fd_observer_data == stream || env->alloc_observer_data == stream || env->resource_observer_data == stream)
     {
         return;
     }
@@ -755,12 +843,16 @@ static struct p101_env_fault_state *p101_env_fault_state_dup(struct p101_error *
     }
 
     state->target_call = source->target_call;
-    state->calls_seen  = 0;
-    state->errnum      = source->errnum;
-    state->call_name   = NULL;
-    state->log_stream  = NULL;
-    state->log_path    = NULL;
-    state->log_owned   = 0;
+    atomic_init(&state->calls_seen, 0UL);
+    state->repeat     = source->repeat;
+    state->errnum     = source->errnum;
+    state->kind       = source->kind;
+    state->mode_name  = source->mode_name;
+    state->amount     = source->amount;
+    state->call_name  = NULL;
+    state->log_stream = NULL;
+    state->log_path   = NULL;
+    state->log_owned  = 0;
 
     if(source->call_name != NULL)
     {
@@ -820,20 +912,31 @@ static void p101_env_fault_state_destroy(struct p101_env_fault_state *state)
     free(state);
 }
 
-static void p101_env_log_fault_hit(const struct p101_env_fault_state *state, const char *call_name)
+static void p101_env_log_fault_hit(const struct p101_env *env, const struct p101_env_fault_state *state, const char *call_name)
 {
+    unsigned long calls_seen;
+    int           write_result;
+
     if(state == NULL || state->log_stream == NULL)
     {
         return;
     }
 
-    fprintf(state->log_stream, "P101FAULT\t1\t%" PRIdMAX "\t%lu\t%s\t%d\n", (intmax_t)getpid(), state->calls_seen, (call_name == NULL) ? "?" : call_name, state->errnum);    // NOLINT(cert-err33-c)
-    fflush(state->log_stream);                                                                                                                                               // NOLINT(cert-err33-c)
+    calls_seen = atomic_load_explicit(&state->calls_seen, memory_order_relaxed);
+    flockfile(state->log_stream);
+    write_result = fprintf(state->log_stream, "P101FAULT\t2\t%" PRIdMAX "\t%lu\t%s\t%d\t%s\t%zu\n", (intmax_t)getpid(), calls_seen, (call_name == NULL) ? "?" : call_name, state->errnum, state->mode_name,
+                           state->amount);    // NOLINT(cert-err33-c)
+    if(write_result < 0 || fflush(state->log_stream) == EOF)
+    {
+        p101_env_record_event_write_failure(env);
+    }
+    funlockfile(state->log_stream);
 }
 
-static int p101_env_environment_fault_injector(const struct p101_env *env, const char *call_name, void *user_data)
+static int p101_env_environment_fault_action(const struct p101_env *env, const char *call_name, void *user_data, struct p101_env_fault_action *action)
 {
     struct p101_env_fault_state *state;
+    unsigned long                calls_seen;
 
     (void)env;
     state = (struct p101_env_fault_state *)user_data;
@@ -851,15 +954,29 @@ static int p101_env_environment_fault_injector(const struct p101_env *env, const
         }
     }
 
-    state->calls_seen++;
+    calls_seen = atomic_fetch_add_explicit(&state->calls_seen, 1UL, memory_order_relaxed) + 1UL;
 
-    if(state->calls_seen == state->target_call)
+    if(calls_seen >= state->target_call && calls_seen - state->target_call < state->repeat)
     {
-        p101_env_log_fault_hit(state, call_name);
-        return state->errnum;
+        p101_env_log_fault_hit(env, state, call_name);
+        action->kind   = state->kind;
+        action->errnum = state->errnum;
+        action->amount = state->amount;
+        return 1;
     }
 
     return 0;
+}
+
+static int p101_env_environment_fault_injector(const struct p101_env *env, const char *call_name, void *user_data)
+{
+    struct p101_env_fault_action action;
+
+    if(!p101_env_environment_fault_action(env, call_name, user_data, &action))
+    {
+        return 0;
+    }
+    return action.kind == P101_ENV_FAULT_ERROR ? action.errnum : ENOTSUP;
 }
 
 static unsigned long p101_env_parse_unsigned_environment(const char *text, unsigned long default_value, int *ok)
@@ -1132,257 +1249,6 @@ void p101_env_trace_call_exit(const struct p101_env *env, const char *call_name,
     p101_env_call_notify(env, P101_ENV_CALL_EXIT, call_name, NULL, result, file_name, function_name, line_number);
 }
 
-p101_env_event_line_status p101_env_read_event_line(struct p101_error *err, FILE *stream, char *line, size_t line_size)
-{
-    bool   saw_byte;
-    bool   malformed;
-    size_t length;
-
-    if(line != NULL && line_size > 0U)
-    {
-        line[0] = '\0';
-    }
-
-    if(stream == NULL || line == NULL || line_size == 0U)
-    {
-        P101_ERROR_RAISE_CHECK(err);
-
-        return P101_ENV_EVENT_LINE_ERROR;
-    }
-
-    saw_byte  = false;
-    malformed = false;
-    length    = 0U;
-
-    while(true)
-    {
-        int ch;
-
-        ch = fgetc(stream);
-
-        if(ch == EOF)
-        {
-            if(ferror(stream) != 0)
-            {
-                line[length] = '\0';
-                P101_ERROR_RAISE_ERRNO(err, errno == 0 ? EIO : errno);
-
-                return P101_ENV_EVENT_LINE_ERROR;
-            }
-
-            break;
-        }
-
-        saw_byte = true;
-
-        if(ch == '\0')
-        {
-            malformed = true;
-        }
-
-        if(length + 1U < line_size)
-        {
-            line[length] = (char)ch;
-            length++;
-        }
-        else
-        {
-            malformed = true;
-        }
-
-        if(ch == '\n')
-        {
-            break;
-        }
-    }
-
-    if(!saw_byte)
-    {
-        return P101_ENV_EVENT_LINE_EOF;
-    }
-
-    line[length] = '\0';
-
-    if(malformed)
-    {
-        return P101_ENV_EVENT_LINE_MALFORMED;
-    }
-
-    return P101_ENV_EVENT_LINE_OK;
-}
-
-p101_env_event_parse_status p101_env_parse_event_line(char *line, struct p101_env_event_record *record)
-{
-    p101_env_event_parse_status status;
-    size_t                      length;
-
-    status = P101_ENV_EVENT_PARSE_MALFORMED;
-
-    if(line == NULL || record == NULL)
-    {
-        goto done;
-    }
-
-    if(!p101_env_event_line_is_ours(line))
-    {
-        status = P101_ENV_EVENT_PARSE_OTHER;
-        goto done;
-    }
-
-    memset(record, 0, sizeof(*record));
-    record->fd          = -1;
-    record->child_pid   = -1;
-    record->line_number = -1;
-
-    length = strlen(line);
-    while(length > 0U && (line[length - 1U] == '\n' || line[length - 1U] == '\r'))
-    {
-        length--;
-        line[length] = '\0';
-    }
-
-    status = p101_env_event_parse_fd(line, record);
-    if(status != P101_ENV_EVENT_PARSE_OTHER)
-    {
-        goto done;
-    }
-
-    status = p101_env_event_parse_alloc(line, record);
-    if(status != P101_ENV_EVENT_PARSE_OTHER)
-    {
-        goto done;
-    }
-
-    status = p101_env_event_parse_fork(line, record);
-    if(status != P101_ENV_EVENT_PARSE_OTHER)
-    {
-        goto done;
-    }
-
-    status = p101_env_event_parse_spawn(line, record);
-    if(status != P101_ENV_EVENT_PARSE_OTHER)
-    {
-        goto done;
-    }
-
-    status = p101_env_event_parse_exec(line, record);
-    if(status != P101_ENV_EVENT_PARSE_OTHER)
-    {
-        goto done;
-    }
-
-    status = p101_env_event_parse_exec_failure(line, record);
-    if(status != P101_ENV_EVENT_PARSE_OTHER)
-    {
-        goto done;
-    }
-
-    status = p101_env_event_parse_call(line, record);
-
-done:
-    return status;
-}
-
-int p101_env_event_line_is_ours(const char *line)
-{
-    int result;
-
-    result = 0;
-
-    if(line == NULL)
-    {
-        goto done;
-    }
-
-    if(strncmp(line, "P101FD\t", strlen("P101FD\t")) == 0)
-    {
-        result = 1;
-        goto done;
-    }
-
-    if(strncmp(line, "P101ALLOC\t", strlen("P101ALLOC\t")) == 0)
-    {
-        result = 1;
-        goto done;
-    }
-
-    if(strncmp(line, "P101FORK\t", strlen("P101FORK\t")) == 0)
-    {
-        result = 1;
-        goto done;
-    }
-
-    if(strncmp(line, "P101SPAWN\t", strlen("P101SPAWN\t")) == 0)
-    {
-        result = 1;
-        goto done;
-    }
-
-    if(strncmp(line, "P101EXEC\t", strlen("P101EXEC\t")) == 0)
-    {
-        result = 1;
-        goto done;
-    }
-
-    if(strncmp(line, "P101EXECFAIL\t", strlen("P101EXECFAIL\t")) == 0)
-    {
-        result = 1;
-        goto done;
-    }
-
-    if(strncmp(line, "P101CALL\t", strlen("P101CALL\t")) == 0)
-    {
-        result = 1;
-        goto done;
-    }
-
-done:
-    return result;
-}
-
-const char *p101_env_event_parse_status_name(p101_env_event_parse_status status)
-{
-    const char *name;
-
-#ifdef __clang__
-    #pragma clang diagnostic push
-    #pragma clang diagnostic ignored "-Wcovered-switch-default"
-#endif
-    switch(status)
-    {
-        case P101_ENV_EVENT_PARSE_OTHER:
-        {
-            name = "not a p101 event record";
-            break;
-        }
-        case P101_ENV_EVENT_PARSE_OK:
-        {
-            name = "ok";
-            break;
-        }
-        case P101_ENV_EVENT_PARSE_MALFORMED:
-        {
-            name = "malformed record";
-            break;
-        }
-        case P101_ENV_EVENT_PARSE_BAD_VERSION:
-        {
-            name = "unsupported record version";
-            break;
-        }
-        default:
-        {
-            name = "unknown event parse status";
-            break;
-        }
-    }
-#ifdef __clang__
-    #pragma clang diagnostic pop
-#endif
-
-    return name;
-}
-
 int p101_env_set_event_log_version(struct p101_env *env, int version)
 {
     int result;
@@ -1406,7 +1272,7 @@ int p101_env_get_event_log_version(const struct p101_env *env)
 
     p101_env_trace(env, __FILE__, __func__, __LINE__);
 
-    version = P101_ENV_EVENT_LOG_VERSION_2;
+    version = P101_TOOL_EVENT_LOG_VERSION_3;
 
     if(env != NULL)
     {
@@ -1442,6 +1308,37 @@ int p101_env_check_fault(const struct p101_env *env, const char *call_name)
     }
 
     return env->fault_injector(env, call_name, env->fault_data);
+}
+
+int p101_env_check_fault_action(const struct p101_env *env, const char *call_name, struct p101_env_fault_action *action)
+{
+    int errnum;
+
+    if(action == NULL)
+    {
+        return 0;
+    }
+    action->kind   = P101_ENV_FAULT_NONE;
+    action->errnum = 0;
+    action->amount = 0U;
+
+    if(env == NULL || env->fault_injector == NULL)
+    {
+        return 0;
+    }
+    if(env->owned_fault_state != NULL && env->fault_injector == p101_env_environment_fault_injector)
+    {
+        return p101_env_environment_fault_action(env, call_name, env->fault_data, action);
+    }
+
+    errnum = env->fault_injector(env, call_name, env->fault_data);
+    if(errnum == 0)
+    {
+        return 0;
+    }
+    action->kind   = P101_ENV_FAULT_ERROR;
+    action->errnum = errnum;
+    return 1;
 }
 
 void p101_env_enable_fd_tracking(struct p101_env *env, struct p101_error *err)
@@ -1544,16 +1441,53 @@ void p101_env_set_alloc_log(struct p101_env *env, FILE *stream)
     p101_env_close_owned_resource_log_if_unused(env);
 }
 
+/* cppcheck-suppress funcArgNamesDifferentUnnamed */
+void p101_env_set_resource_observer(struct p101_env *env, p101_env_resource_observer observer, void *user_data)
+{
+    p101_env_trace(env, __FILE__, __func__, __LINE__);
+
+    if(env == NULL)
+    {
+        return;
+    }
+
+    env->resource_observer      = observer;
+    env->resource_observer_data = user_data;
+    p101_env_close_owned_resource_log_if_unused(env);
+}
+
+void p101_env_set_resource_log(struct p101_env *env, FILE *stream)
+{
+    p101_env_trace(env, __FILE__, __func__, __LINE__);
+
+    if(env == NULL)
+    {
+        return;
+    }
+
+    if(stream == NULL)
+    {
+        env->resource_observer      = NULL;
+        env->resource_observer_data = NULL;
+        p101_env_close_owned_resource_log_if_unused(env);
+        return;
+    }
+
+    env->resource_observer      = p101_env_resource_log_observer;
+    env->resource_observer_data = stream;
+    p101_env_close_owned_resource_log_if_unused(env);
+}
+
 static int p101_env_supported_event_log_version(long version)
 {
-    return (version == P101_ENV_EVENT_LOG_VERSION_2) ? 1 : 0;
+    return (version == P101_TOOL_EVENT_LOG_VERSION_3) ? 1 : 0;
 }
 
 static int p101_env_effective_event_log_version(const struct p101_env *env)
 {
     if(env == NULL)
     {
-        return P101_ENV_EVENT_LOG_VERSION_2;
+        return P101_TOOL_EVENT_LOG_VERSION_3;
     }
 
     return env->event_log_version;
@@ -1561,101 +1495,83 @@ static int p101_env_effective_event_log_version(const struct p101_env *env)
 
 static unsigned long long p101_env_next_event_sequence(const struct p101_env *env)
 {
-    unsigned long long sequence;
-
-    sequence = 0ULL;
-
     if(env != NULL && env->event_state != NULL)
     {
-        env->event_state->next_sequence++;
-        sequence = env->event_state->next_sequence;
+        return atomic_fetch_add_explicit(&env->event_state->next_sequence, 1ULL, memory_order_relaxed) + 1ULL;
     }
 
-    return sequence;
+    return 0ULL;
 }
 
-static void p101_env_timestamp_text(char text[], size_t text_size, clockid_t clock_id)
+int p101_env_event_log_failed(const struct p101_env *env)
 {
-    struct timespec    ts;
-    char               formatted[P101_NUMBER_BUF_LEN];
-    unsigned long long seconds;
-    unsigned long long nanoseconds;
-    size_t             index;
+    return (env != NULL && env->event_state != NULL) ? atomic_load_explicit(&env->event_state->write_failed, memory_order_acquire) : 0;
+}
 
-    if(text_size == 0U)
+int p101_env_event_log_errno(const struct p101_env *env)
+{
+    return (env != NULL && env->event_state != NULL) ? atomic_load_explicit(&env->event_state->write_errno, memory_order_relaxed) : 0;
+}
+
+void p101_env_clear_event_log_error(struct p101_env *env)
+{
+    if(env != NULL && env->event_state != NULL)
+    {
+        atomic_store_explicit(&env->event_state->write_errno, 0, memory_order_relaxed);
+        atomic_store_explicit(&env->event_state->write_failed, 0, memory_order_release);
+    }
+}
+
+static void p101_env_record_event_write_failure(const struct p101_env *env)
+{
+    int actual_error;
+
+    if(env == NULL || env->event_state == NULL)
     {
         return;
     }
-    text[0] = '\0';
 
-    if(clock_gettime(clock_id, &ts) != 0)
-    {
-        if(text_size > 1U)
-        {
-            text[0] = '-';
-            text[1] = '\0';
-        }
-        return;
-    }
-
-    seconds     = (unsigned long long)ts.tv_sec;
-    nanoseconds = (seconds * P101_NANOSECONDS_PER_SECOND) + (unsigned long long)ts.tv_nsec;
-    snprintf(formatted, sizeof(formatted), "%llu", nanoseconds);    // NOLINT(cert-err33-c)
-
-    index = 0U;
-    while((index + 1U) < text_size && formatted[index] != '\0')
-    {
-        text[index] = formatted[index];
-        index++;
-    }
-    text[index] = '\0';
+    actual_error = errno == 0 ? EIO : errno;
+    atomic_store_explicit(&env->event_state->write_errno, actual_error, memory_order_relaxed);
+    atomic_store_explicit(&env->event_state->write_failed, 1, memory_order_release);
 }
 
-static void p101_env_log_append_event_prefix(const struct p101_env *env, char line[], size_t line_size, size_t *offset, const char *magic, long pid)
+static void p101_env_write_event(const struct p101_env *env, FILE *stream, const struct p101_tool_event_output *record)
 {
-    char version[P101_NUMBER_BUF_LEN];
-    char number[P101_NUMBER_BUF_LEN];
-    int  log_version;
-
-    log_version = p101_env_effective_event_log_version(env);
-
-    p101_env_log_append_text(line, line_size, offset, magic);
-    p101_env_log_append_char(line, line_size, offset, '\t');
-    snprintf(version, sizeof(version), "%d", log_version);    // NOLINT(cert-err33-c)
-    p101_env_log_append_text(line, line_size, offset, version);
-    p101_env_log_append_char(line, line_size, offset, '\t');
-    snprintf(number, sizeof(number), "%ld", pid);    // NOLINT(cert-err33-c)
-    p101_env_log_append_text(line, line_size, offset, number);
-    p101_env_log_append_char(line, line_size, offset, '\t');
-
-    if(log_version == P101_ENV_EVENT_LOG_VERSION_2)
+    if(p101_tool_event_write(stream, record) != 0)
     {
-        unsigned long long sequence;
-        char               monotonic[P101_NUMBER_BUF_LEN];
-        char               wall[P101_NUMBER_BUF_LEN];
+        p101_env_record_event_write_failure(env);
+    }
+}
 
-        sequence = p101_env_next_event_sequence(env);
-        snprintf(number, sizeof(number), "%llu", sequence);    // NOLINT(cert-err33-c)
-        p101_env_log_append_text(line, line_size, offset, number);
-        p101_env_log_append_char(line, line_size, offset, '\t');
-        p101_env_timestamp_text(monotonic, sizeof(monotonic), CLOCK_MONOTONIC);
-        p101_env_log_append_text(line, line_size, offset, monotonic);
-        p101_env_log_append_char(line, line_size, offset, '\t');
-        p101_env_timestamp_text(wall, sizeof(wall), CLOCK_REALTIME);
-        p101_env_log_append_text(line, line_size, offset, wall);
-        p101_env_log_append_char(line, line_size, offset, '\t');
+static void p101_env_prepare_event_record(const struct p101_env *env, struct p101_tool_event_output *record, p101_tool_event_record_kind kind, long pid)
+{
+    struct timespec monotonic;
+    struct timespec wall;
+
+    memset(record, 0, sizeof(*record));
+    record->version     = p101_env_effective_event_log_version(env);
+    record->record_kind = kind;
+    record->pid         = pid;
+    record->context_id  = (env == NULL || env->event_state == NULL) ? 0U : (size_t)env->event_state->context_id;
+    record->sequence    = (size_t)p101_env_next_event_sequence(env);
+
+    if(clock_gettime(CLOCK_MONOTONIC, &monotonic) == 0 && monotonic.tv_sec >= 0 && (unsigned long long)monotonic.tv_sec <= (SIZE_MAX / P101_NANOSECONDS_PER_SECOND))
+    {
+        record->monotonic_ns           = ((size_t)monotonic.tv_sec * P101_NANOSECONDS_PER_SECOND) + (size_t)monotonic.tv_nsec;
+        record->monotonic_ns_available = 1;
+    }
+    if(clock_gettime(CLOCK_REALTIME, &wall) == 0 && wall.tv_sec >= 0 && (unsigned long long)wall.tv_sec <= (SIZE_MAX / P101_NANOSECONDS_PER_SECOND))
+    {
+        record->wall_unix_ns           = ((size_t)wall.tv_sec * P101_NANOSECONDS_PER_SECOND) + (size_t)wall.tv_nsec;
+        record->wall_unix_ns_available = 1;
     }
 }
 
 static void p101_env_fd_log_observer(const struct p101_env *env, p101_env_fd_event event, int fd, const char *file_name, const char *function_name, int line_number, void *user_data)
 {
-    const char *fields[2];
-    FILE       *stream;
-    char       *line;
-    char        number[P101_NUMBER_BUF_LEN];
-    size_t      line_size;
-    size_t      offset;
-    size_t      length;
+    struct p101_tool_event_output record;
+    FILE                         *stream;
 
     stream = (FILE *)user_data;
 
@@ -1664,123 +1580,51 @@ static void p101_env_fd_log_observer(const struct p101_env *env, p101_env_fd_eve
         return;
     }
 
-    fields[0] = function_name;
-    fields[1] = file_name;
-    line      = p101_env_log_buffer_create(fields, 2U, &line_size);
-    if(line == NULL)
-    {
-        return;
-    }
-
     /* getpid() on every line rather than once at install time: after a fork
      * the child keeps writing to the same stream, and the analyzer has to be
      * able to tell the two processes' descriptors apart. */
-    offset  = 0;
-    line[0] = '\0';
-    p101_env_log_append_event_prefix(env, line, line_size, &offset, "P101FD", (long)getpid());
-    p101_env_log_append_text(line, line_size, &offset, (event == P101_ENV_FD_OPEN) ? "OPEN" : "CLOSE");
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    snprintf(number, sizeof(number), "%d", fd);    // NOLINT(cert-err33-c)
-    p101_env_log_append_text(line, line_size, &offset, number);
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    snprintf(number, sizeof(number), "%d", line_number);    // NOLINT(cert-err33-c)
-    p101_env_log_append_text(line, line_size, &offset, number);
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    p101_env_log_append_field(line, line_size, &offset, function_name);
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    p101_env_log_append_field(line, line_size, &offset, file_name);
-    p101_env_log_append_char(line, line_size, &offset, '\n');
-    length = p101_env_log_finish_record(line, line_size, offset);
-
-    fwrite(line, 1, length, stream);    // NOLINT(cert-err33-c)
-    fflush(stream);                     // NOLINT(cert-err33-c)
-    free(line);
+    p101_env_prepare_event_record(env, &record, P101_TOOL_EVENT_RECORD_FD, (long)getpid());
+    record.fd_kind       = event == P101_ENV_FD_OPEN ? P101_TOOL_EVENT_FD_OPEN : P101_TOOL_EVENT_FD_CLOSE;
+    record.fd            = fd;
+    record.line_number   = line_number;
+    record.function_name = function_name;
+    record.file_name     = file_name;
+    p101_env_write_event(env, stream, &record);
 }
 
 static void p101_env_fork_log(const struct p101_env *env, FILE *stream, long parent_pid, long child_pid, const char *file_name, const char *function_name, int line_number)
 {
-    const char *fields[2];
-    char       *line;
-    char        number[P101_NUMBER_BUF_LEN];
-    size_t      line_size;
-    size_t      offset;
-    size_t      length;
+    struct p101_tool_event_output record;
 
     if(stream == NULL)
     {
         return;
     }
 
-    fields[0] = function_name;
-    fields[1] = file_name;
-    line      = p101_env_log_buffer_create(fields, 2U, &line_size);
-    if(line == NULL)
-    {
-        return;
-    }
-
-    offset  = 0;
-    line[0] = '\0';
-    p101_env_log_append_event_prefix(env, line, line_size, &offset, "P101FORK", parent_pid);
-    snprintf(number, sizeof(number), "%ld", child_pid);    // NOLINT(cert-err33-c)
-    p101_env_log_append_text(line, line_size, &offset, number);
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    snprintf(number, sizeof(number), "%d", line_number);    // NOLINT(cert-err33-c)
-    p101_env_log_append_text(line, line_size, &offset, number);
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    p101_env_log_append_field(line, line_size, &offset, function_name);
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    p101_env_log_append_field(line, line_size, &offset, file_name);
-    p101_env_log_append_char(line, line_size, &offset, '\n');
-    length = p101_env_log_finish_record(line, line_size, offset);
-
-    fwrite(line, 1, length, stream);    // NOLINT(cert-err33-c)
-    fflush(stream);                     // NOLINT(cert-err33-c)
-    free(line);
+    p101_env_prepare_event_record(env, &record, P101_TOOL_EVENT_RECORD_FORK, parent_pid);
+    record.child_pid     = child_pid;
+    record.line_number   = line_number;
+    record.function_name = function_name;
+    record.file_name     = file_name;
+    p101_env_write_event(env, stream, &record);
 }
 
 static void p101_env_spawn_log(const struct p101_env *env, FILE *stream, long parent_pid, long child_pid, const char *target, const char *file_name, const char *function_name, int line_number)
 {
-    const char *fields[3];
-    char       *line;
-    char        number[P101_NUMBER_BUF_LEN];
-    size_t      line_size;
-    size_t      offset;
+    struct p101_tool_event_output record;
 
     if(stream == NULL)
     {
         return;
     }
 
-    fields[0] = function_name;
-    fields[1] = file_name;
-    fields[2] = target;
-    line      = p101_env_log_buffer_create(fields, 3U, &line_size);
-    if(line == NULL)
-    {
-        return;
-    }
-
-    offset  = 0;
-    line[0] = '\0';
-    p101_env_log_append_event_prefix(env, line, line_size, &offset, "P101SPAWN", parent_pid);
-    snprintf(number, sizeof(number), "%ld", child_pid);    // NOLINT(cert-err33-c)
-    p101_env_log_append_text(line, line_size, &offset, number);
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    snprintf(number, sizeof(number), "%d", line_number);    // NOLINT(cert-err33-c)
-    p101_env_log_append_text(line, line_size, &offset, number);
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    p101_env_log_append_field(line, line_size, &offset, function_name);
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    p101_env_log_append_field(line, line_size, &offset, file_name);
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    p101_env_log_append_field(line, line_size, &offset, target);
-    p101_env_log_append_char(line, line_size, &offset, '\n');
-    offset = p101_env_log_finish_record(line, line_size, offset);
-
-    fwrite(line, 1, offset, stream);    // NOLINT(cert-err33-c)
-    fflush(stream);                     // NOLINT(cert-err33-c)
-    free(line);
+    p101_env_prepare_event_record(env, &record, P101_TOOL_EVENT_RECORD_SPAWN, parent_pid);
+    record.child_pid     = child_pid;
+    record.target        = target;
+    record.line_number   = line_number;
+    record.function_name = function_name;
+    record.file_name     = file_name;
+    p101_env_write_event(env, stream, &record);
 }
 
 static long p101_env_exec_scan_limit(void)
@@ -1824,102 +1668,46 @@ static long p101_env_exec_scan_limit(void)
 
 static void p101_env_exec_fd_log(const struct p101_env *env, FILE *stream, int fd, int cloexec, const char *target, const char *file_name, const char *function_name, int line_number)
 {
-    const char *fields[3];
-    char       *line;
-    char        number[P101_NUMBER_BUF_LEN];
-    size_t      line_size;
-    size_t      offset;
+    struct p101_tool_event_output record;
 
     if(stream == NULL)
     {
         return;
     }
 
-    fields[0] = function_name;
-    fields[1] = file_name;
-    fields[2] = target;
-    line      = p101_env_log_buffer_create(fields, 3U, &line_size);
-    if(line == NULL)
-    {
-        return;
-    }
-
-    offset  = 0;
-    line[0] = '\0';
-
-    p101_env_log_append_event_prefix(env, line, line_size, &offset, "P101EXEC", (long)getpid());
-    snprintf(number, sizeof(number), "%d", fd);    // NOLINT(cert-err33-c)
-    p101_env_log_append_text(line, line_size, &offset, number);
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    snprintf(number, sizeof(number), "%d", cloexec);    // NOLINT(cert-err33-c)
-    p101_env_log_append_text(line, line_size, &offset, number);
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    snprintf(number, sizeof(number), "%d", line_number);    // NOLINT(cert-err33-c)
-    p101_env_log_append_text(line, line_size, &offset, number);
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    p101_env_log_append_field(line, line_size, &offset, function_name);
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    p101_env_log_append_field(line, line_size, &offset, file_name);
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    p101_env_log_append_field(line, line_size, &offset, target);
-    p101_env_log_append_char(line, line_size, &offset, '\n');
-    offset = p101_env_log_finish_record(line, line_size, offset);
-
-    fwrite(line, 1, offset, stream);    // NOLINT(cert-err33-c)
-    fflush(stream);                     // NOLINT(cert-err33-c)
-    free(line);
+    p101_env_prepare_event_record(env, &record, P101_TOOL_EVENT_RECORD_EXEC, (long)getpid());
+    record.fd            = fd;
+    record.cloexec       = cloexec;
+    record.target        = target;
+    record.line_number   = line_number;
+    record.function_name = function_name;
+    record.file_name     = file_name;
+    p101_env_write_event(env, stream, &record);
 }
 
 static void p101_env_exec_failure_log(const struct p101_env *env, FILE *stream, const char *target, const char *file_name, const char *function_name, int line_number)
 {
-    const char *fields[3];
-    char       *line;
-    char        number[P101_NUMBER_BUF_LEN];
-    size_t      line_size;
-    size_t      offset;
+    struct p101_tool_event_output record;
 
     if(stream == NULL)
     {
         return;
     }
 
-    fields[0] = function_name;
-    fields[1] = file_name;
-    fields[2] = target;
-    line      = p101_env_log_buffer_create(fields, 3U, &line_size);
-    if(line == NULL)
-    {
-        return;
-    }
-
-    offset  = 0;
-    line[0] = '\0';
-    p101_env_log_append_event_prefix(env, line, line_size, &offset, "P101EXECFAIL", (long)getpid());
-    snprintf(number, sizeof(number), "%d", line_number);    // NOLINT(cert-err33-c)
-    p101_env_log_append_text(line, line_size, &offset, number);
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    p101_env_log_append_field(line, line_size, &offset, function_name);
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    p101_env_log_append_field(line, line_size, &offset, file_name);
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    p101_env_log_append_field(line, line_size, &offset, target);
-    p101_env_log_append_char(line, line_size, &offset, '\n');
-    offset = p101_env_log_finish_record(line, line_size, offset);
-
-    fwrite(line, 1, offset, stream);    // NOLINT(cert-err33-c)
-    fflush(stream);                     // NOLINT(cert-err33-c)
-    free(line);
+    p101_env_prepare_event_record(env, &record, P101_TOOL_EVENT_RECORD_EXEC_FAIL, (long)getpid());
+    record.target        = target;
+    record.line_number   = line_number;
+    record.function_name = function_name;
+    record.file_name     = file_name;
+    p101_env_write_event(env, stream, &record);
 }
 
 static void p101_env_alloc_log_observer(const struct p101_env *env, p101_env_alloc_event event, const void *ptr, const void *new_ptr, size_t size, const char *file_name, const char *function_name, int line_number, void *user_data)
 {
-    const char *fields[2];
-    FILE       *stream;
-    char       *line;
-    char        number[P101_NUMBER_BUF_LEN];
-    char        pointer[P101_POINTER_BUF_LEN];
-    size_t      line_size;
-    size_t      offset;
+    struct p101_tool_event_output record;
+    FILE                         *stream;
+    char                          pointer[P101_POINTER_BUF_LEN];
+    char                          new_pointer[P101_POINTER_BUF_LEN];
 
     (void)env;
     stream = (FILE *)user_data;
@@ -1929,92 +1717,62 @@ static void p101_env_alloc_log_observer(const struct p101_env *env, p101_env_all
         return;
     }
 
-    fields[0] = function_name;
-    fields[1] = file_name;
-    line      = p101_env_log_buffer_create(fields, 2U, &line_size);
-    if(line == NULL)
+    snprintf(pointer, sizeof(pointer), "%p", ptr);    // NOLINT(cert-err33-c)
+    if(new_ptr != NULL)
+    {
+        snprintf(new_pointer, sizeof(new_pointer), "%p", new_ptr);    // NOLINT(cert-err33-c)
+    }
+
+    p101_env_prepare_event_record(env, &record, P101_TOOL_EVENT_RECORD_ALLOC, (long)getpid());
+    record.alloc_kind = P101_TOOL_EVENT_ALLOC_REALLOC;
+    if(event == P101_ENV_ALLOC_ALLOC)
+    {
+        record.alloc_kind = P101_TOOL_EVENT_ALLOC_ALLOC;
+    }
+    else if(event == P101_ENV_ALLOC_FREE)
+    {
+        record.alloc_kind = P101_TOOL_EVENT_ALLOC_FREE;
+    }
+    record.ptr           = pointer;
+    record.new_ptr       = new_ptr == NULL ? NULL : new_pointer;
+    record.size          = size;
+    record.line_number   = line_number;
+    record.function_name = function_name;
+    record.file_name     = file_name;
+    p101_env_write_event(env, stream, &record);
+}
+
+static void p101_env_resource_log_observer(const struct p101_env *env, p101_tool_event_resource_kind event, const char *resource_class, const char *resource_id, const char *related_id, size_t size, const char *metadata, const char *file_name,
+                                           const char *function_name, int line_number, void *user_data)
+{
+    struct p101_tool_event_output record;
+    FILE                         *stream;
+
+    stream = (FILE *)user_data;
+    if(stream == NULL)
     {
         return;
     }
 
-    offset  = 0;
-    line[0] = '\0';
-
-    p101_env_log_append_event_prefix(env, line, line_size, &offset, "P101ALLOC", (long)getpid());
-    p101_env_log_append_text(line, line_size, &offset, p101_env_alloc_event_name(event));
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    snprintf(pointer, sizeof(pointer), "%p", ptr);    // NOLINT(cert-err33-c)
-    p101_env_log_append_text(line, line_size, &offset, pointer);
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-
-    if(new_ptr == NULL)
-    {
-        p101_env_log_append_char(line, line_size, &offset, '-');
-    }
-    else
-    {
-        snprintf(pointer, sizeof(pointer), "%p", new_ptr);    // NOLINT(cert-err33-c)
-        p101_env_log_append_text(line, line_size, &offset, pointer);
-    }
-
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    snprintf(number, sizeof(number), "%zu", size);    // NOLINT(cert-err33-c)
-    p101_env_log_append_text(line, line_size, &offset, number);
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    snprintf(number, sizeof(number), "%d", line_number);    // NOLINT(cert-err33-c)
-    p101_env_log_append_text(line, line_size, &offset, number);
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    p101_env_log_append_field(line, line_size, &offset, function_name);
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    p101_env_log_append_field(line, line_size, &offset, file_name);
-    p101_env_log_append_char(line, line_size, &offset, '\n');
-    offset = p101_env_log_finish_record(line, line_size, offset);
-
-    fwrite(line, 1, offset, stream);    // NOLINT(cert-err33-c)
-    fflush(stream);                     // NOLINT(cert-err33-c)
-    free(line);
-}
-
-static const char *p101_env_alloc_event_name(p101_env_alloc_event event)
-{
-#ifdef __clang__
-    #pragma clang diagnostic push
-    #pragma clang diagnostic ignored "-Wcovered-switch-default"
-#endif
-    switch(event)
-    {
-        case P101_ENV_ALLOC_ALLOC:
-        {
-            return "ALLOC";
-        }
-        case P101_ENV_ALLOC_FREE:
-        {
-            return "FREE";
-        }
-        case P101_ENV_ALLOC_REALLOC:
-        {
-            return "REALLOC";
-        }
-        default:
-        {
-            return "UNKNOWN";
-        }
-    }
-#ifdef __clang__
-    #pragma clang diagnostic pop
-#endif
+    p101_env_prepare_event_record(env, &record, P101_TOOL_EVENT_RECORD_RESOURCE, (long)getpid());
+    record.resource_kind  = event;
+    record.resource_class = resource_class;
+    record.resource_id    = resource_id;
+    record.related_id     = related_id;
+    record.size           = size;
+    record.metadata       = metadata;
+    record.line_number    = line_number;
+    record.function_name  = function_name;
+    record.file_name      = file_name;
+    p101_env_write_event(env, stream, &record);
 }
 
 static void p101_env_call_log_observer(const struct p101_env *env, p101_env_call_event event, const char *call_name, const char *arguments, const char *result, const char *file_name, const char *function_name, int line_number, void *user_data)
 {
-    const char *fields[P101_CALL_LOG_FIELD_COUNT];
-    FILE       *stream;
-    char       *line;
-    char        number[P101_NUMBER_BUF_LEN];
-    const char *logged_arguments;
-    const char *logged_result;
-    size_t      line_size;
-    size_t      offset;
+    struct p101_tool_event_output record;
+    FILE                         *stream;
+    const char                   *logged_arguments;
+    const char                   *logged_result;
 
     if(env == NULL)
     {
@@ -2040,41 +1798,15 @@ static void p101_env_call_log_observer(const struct p101_env *env, p101_env_call
 
     logged_arguments = ((env->call_log_options & P101_ENV_CALL_LOG_ARGUMENTS) == 0U) ? NULL : arguments;
     logged_result    = ((env->call_log_options & P101_ENV_CALL_LOG_RESULT) == 0U) ? NULL : result;
-    fields[0]        = function_name;
-    fields[1]        = (call_name == NULL) ? function_name : call_name;
-    fields[2]        = logged_arguments;
-    fields[3]        = logged_result;
-    fields[4]        = file_name;
-    line             = p101_env_log_buffer_create(fields, P101_CALL_LOG_FIELD_COUNT, &line_size);
-    if(line == NULL)
-    {
-        return;
-    }
-
-    offset  = 0;
-    line[0] = '\0';
-
-    p101_env_log_append_event_prefix(env, line, line_size, &offset, "P101CALL", (long)getpid());
-    p101_env_log_append_text(line, line_size, &offset, (event == P101_ENV_CALL_ENTER) ? "ENTER" : "EXIT");
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    snprintf(number, sizeof(number), "%d", line_number);    // NOLINT(cert-err33-c)
-    p101_env_log_append_text(line, line_size, &offset, number);
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    p101_env_log_append_field(line, line_size, &offset, function_name);
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    p101_env_log_append_field(line, line_size, &offset, (call_name == NULL) ? function_name : call_name);
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    p101_env_log_append_field(line, line_size, &offset, logged_arguments);
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    p101_env_log_append_field(line, line_size, &offset, logged_result);
-    p101_env_log_append_char(line, line_size, &offset, '\t');
-    p101_env_log_append_field(line, line_size, &offset, file_name);
-    p101_env_log_append_char(line, line_size, &offset, '\n');
-    offset = p101_env_log_finish_record(line, line_size, offset);
-
-    fwrite(line, 1, offset, stream);    // NOLINT(cert-err33-c)
-    fflush(stream);                     // NOLINT(cert-err33-c)
-    free(line);
+    p101_env_prepare_event_record(env, &record, P101_TOOL_EVENT_RECORD_CALL, (long)getpid());
+    record.call_kind     = event == P101_ENV_CALL_ENTER ? P101_TOOL_EVENT_CALL_ENTER : P101_TOOL_EVENT_CALL_EXIT;
+    record.line_number   = line_number;
+    record.function_name = function_name;
+    record.call_name     = call_name == NULL ? function_name : call_name;
+    record.arguments     = logged_arguments;
+    record.result        = logged_result;
+    record.file_name     = file_name;
+    p101_env_write_event(env, stream, &record);
 }
 
 static void p101_env_call_notify(const struct p101_env *env, p101_env_call_event event, const char *call_name, const char *arguments, const char *result, const char *file_name, const char *function_name, int line_number)
@@ -2083,789 +1815,6 @@ static void p101_env_call_notify(const struct p101_env *env, p101_env_call_event
     {
         env->call_observer(env, event, call_name, arguments, result, file_name, function_name, line_number, env->call_observer_data);
     }
-}
-
-static void p101_env_log_append_char(char line[], size_t line_size, size_t *offset, char ch)
-{
-    if(*offset + 1U < line_size)
-    {
-        line[*offset] = ch;
-        (*offset)++;
-        line[*offset] = '\0';
-    }
-}
-
-static void p101_env_log_append_text(char line[], size_t line_size, size_t *offset, const char *text)
-{
-    if(text == NULL)
-    {
-        return;
-    }
-
-    while(*text != '\0')
-    {
-        p101_env_log_append_char(line, line_size, offset, *text);
-        text++;
-    }
-}
-
-static size_t p101_env_log_finish_record(char line[], size_t line_size, size_t offset)
-{
-    if(line_size == 0U)
-    {
-        return 0U;
-    }
-
-    if(offset == 0U)
-    {
-        line[0] = '\n';
-        return 1U;
-    }
-
-    if(line[offset - 1U] != '\n')
-    {
-        if(offset + 1U < line_size)
-        {
-            line[offset] = '\n';
-            offset++;
-            line[offset] = '\0';
-        }
-        else
-        {
-            line[offset - 1U] = '\n';
-        }
-    }
-
-    return offset;
-}
-
-static char *p101_env_log_buffer_create(const char *const fields[], size_t field_count, size_t *line_size)
-{
-    char  *line;
-    size_t required;
-
-    required = P101_EVENT_LOG_FIXED_SIZE;
-
-    for(size_t index = 0U; index < field_count; index++)
-    {
-        size_t length;
-
-        if(fields[index] == NULL)
-        {
-            continue;
-        }
-
-        length = strlen(fields[index]);
-        if(length > (SIZE_MAX - required) / 2U)
-        {
-            *line_size = 0U;
-            return NULL;
-        }
-        required += length * 2U;
-    }
-
-    line = (char *)malloc(required);
-    if(line == NULL)
-    {
-        *line_size = 0U;
-        return NULL;
-    }
-
-    line[0]    = '\0';
-    *line_size = required;
-    return line;
-}
-
-static void p101_env_log_append_field(char line[], size_t line_size, size_t *offset, const char *text)
-{
-    if(text == NULL)
-    {
-        p101_env_log_append_char(line, line_size, offset, '-');
-
-        return;
-    }
-
-    while(*text != '\0')
-    {
-        unsigned char ch;
-
-        ch = (unsigned char)*text;
-
-        switch(ch)
-        {
-            case '\t':
-            {
-                p101_env_log_append_text(line, line_size, offset, "\\t");
-                break;
-            }
-            case '\n':
-            {
-                p101_env_log_append_text(line, line_size, offset, "\\n");
-                break;
-            }
-            case '\r':
-            {
-                p101_env_log_append_text(line, line_size, offset, "\\r");
-                break;
-            }
-            case '\\':
-            {
-                p101_env_log_append_text(line, line_size, offset, "\\\\");
-                break;
-            }
-            default:
-            {
-                if(ch < ' ' || ch == P101_ASCII_DELETE)
-                {
-                    p101_env_log_append_char(line, line_size, offset, '?');
-                }
-                else
-                {
-                    p101_env_log_append_char(line, line_size, offset, (char)ch);
-                }
-                break;
-            }
-        }
-
-        text++;
-    }
-}
-
-char *p101_env_event_split(char **cursor)
-{
-    char *start;
-    char *tab;
-
-    start = *cursor;
-
-    if(start == NULL)
-    {
-        goto done;
-    }
-
-    tab = start;
-
-    while(*tab != '\0' && *tab != '\t')
-    {
-        tab++;
-    }
-
-    if(*tab == '\0')
-    {
-        *cursor = NULL;
-    }
-    else
-    {
-        *tab    = '\0';
-        *cursor = tab + 1;
-    }
-
-done:
-    return start;
-}
-
-static void p101_env_event_unescape_char(char **read_cursor, char **write_cursor)
-{
-    (*read_cursor)++;
-    if(**read_cursor == 't')
-    {
-        **write_cursor = '\t';
-    }
-    else if(**read_cursor == 'n')
-    {
-        **write_cursor = '\n';
-    }
-    else if(**read_cursor == 'r')
-    {
-        **write_cursor = '\r';
-    }
-    else
-    {
-        **write_cursor = **read_cursor;
-    }
-    (*write_cursor)++;
-    (*read_cursor)++;
-}
-
-void p101_env_event_unescape_field(char *field)
-{
-    char *read_cursor;
-    char *write_cursor;
-
-    if(field == NULL)
-    {
-        goto done;
-    }
-
-    read_cursor  = field;
-    write_cursor = field;
-    while(*read_cursor != '\0')
-    {
-        if(read_cursor[0] == '\\' && read_cursor[1] != '\0')
-        {
-            p101_env_event_unescape_char(&read_cursor, &write_cursor);
-        }
-        else
-        {
-            *write_cursor = *read_cursor;
-            write_cursor++;
-            read_cursor++;
-        }
-    }
-    *write_cursor = '\0';
-
-done:
-    return;
-}
-
-static int p101_env_event_parse_long_field(const char *text, long min, long max, long *out)
-{
-    const char *cursor;
-    long        value;
-    int         negative;
-    int         result;
-
-    cursor = text;
-    value  = 0;
-    result = 0;
-
-    if(cursor == NULL || *cursor == '\0')
-    {
-        goto done;
-    }
-
-    negative = (*cursor == '-') ? 1 : 0;
-    if(negative)
-    {
-        cursor++;
-    }
-
-    if(*cursor == '\0')
-    {
-        goto done;
-    }
-
-    while(*cursor != '\0')
-    {
-        int digit;
-
-        if(*cursor < '0' || *cursor > '9')
-        {
-            goto done;
-        }
-
-        digit = *cursor - '0';
-        if(value > (LONG_MAX - (long)digit) / P101_ENV_NUMBER_BASE)
-        {
-            goto done;
-        }
-
-        value = (value * P101_ENV_NUMBER_BASE) + digit;
-        cursor++;
-    }
-
-    if(negative)
-    {
-        value = -value;
-    }
-
-    if(value < min || value > max)
-    {
-        goto done;
-    }
-
-    *out   = value;
-    result = 1;
-
-done:
-    return result;
-}
-
-int p101_env_event_parse_size_field(const char *text, size_t *out)
-{
-    const char *cursor;
-    size_t      value;
-    int         result;
-
-    cursor = text;
-    value  = 0U;
-    result = 0;
-
-    if(cursor == NULL || *cursor == '\0')
-    {
-        goto done;
-    }
-
-    while(*cursor != '\0')
-    {
-        size_t digit;
-
-        if(*cursor < '0' || *cursor > '9')
-        {
-            goto done;
-        }
-
-        digit = (size_t)(*cursor - '0');
-        if(value > (SIZE_MAX - digit) / (size_t)P101_ENV_NUMBER_BASE)
-        {
-            goto done;
-        }
-
-        value = (value * (size_t)P101_ENV_NUMBER_BASE) + digit;
-        cursor++;
-    }
-
-    *out   = value;
-    result = 1;
-
-done:
-    return result;
-}
-
-static int p101_env_event_parse_optional_size_field(const char *text, size_t *out, int *available)
-{
-    int result;
-
-    result     = 0;
-    *out       = 0U;
-    *available = 0;
-
-    if(text == NULL || text[0] == '\0')
-    {
-        goto done;
-    }
-
-    if(strcmp(text, "-") == 0)
-    {
-        result = 1;
-        goto done;
-    }
-
-    if(!p101_env_event_parse_size_field(text, out))
-    {
-        goto done;
-    }
-
-    *available = 1;
-    result     = 1;
-
-done:
-    return result;
-}
-
-static p101_env_event_parse_status p101_env_event_parse_version_metadata(char **cursor, struct p101_env_event_record *record)
-{
-    const char *version_text;
-    const char *pid_text;
-    const char *sequence_text;
-    const char *monotonic_text;
-    const char *wall_text;
-    long        version;
-
-    version_text   = p101_env_event_split(cursor);
-    pid_text       = p101_env_event_split(cursor);
-    sequence_text  = p101_env_event_split(cursor);
-    monotonic_text = p101_env_event_split(cursor);
-    wall_text      = p101_env_event_split(cursor);
-
-    if(!p101_env_event_parse_long_field(version_text, 0, LONG_MAX, &version))
-    {
-        return P101_ENV_EVENT_PARSE_MALFORMED;
-    }
-
-    if(version != P101_ENV_EVENT_LOG_VERSION_2)
-    {
-        return P101_ENV_EVENT_PARSE_BAD_VERSION;
-    }
-
-    if(!p101_env_event_parse_long_field(pid_text, 0, LONG_MAX, &record->pid))
-    {
-        return P101_ENV_EVENT_PARSE_MALFORMED;
-    }
-
-    if(!p101_env_event_parse_size_field(sequence_text, &record->sequence))
-    {
-        return P101_ENV_EVENT_PARSE_MALFORMED;
-    }
-
-    if(!p101_env_event_parse_optional_size_field(monotonic_text, &record->monotonic_ns, &record->monotonic_ns_available))
-    {
-        return P101_ENV_EVENT_PARSE_MALFORMED;
-    }
-
-    if(!p101_env_event_parse_optional_size_field(wall_text, &record->wall_unix_ns, &record->wall_unix_ns_available))
-    {
-        return P101_ENV_EVENT_PARSE_MALFORMED;
-    }
-
-    return P101_ENV_EVENT_PARSE_OK;
-}
-
-static p101_env_event_parse_status p101_env_event_parse_fd(char *line, struct p101_env_event_record *record)
-{
-    char                       *cursor;
-    const char                 *kind_text;
-    const char                 *fd_text;
-    const char                 *line_text;
-    long                        fd;
-    long                        line_number;
-    p101_env_event_parse_status status;
-
-    if(strncmp(line, "P101FD\t", strlen("P101FD\t")) != 0)
-    {
-        return P101_ENV_EVENT_PARSE_OTHER;
-    }
-
-    cursor = line + strlen("P101FD\t");
-    status = p101_env_event_parse_version_metadata(&cursor, record);
-    if(status != P101_ENV_EVENT_PARSE_OK)
-    {
-        return status;
-    }
-
-    kind_text             = p101_env_event_split(&cursor);
-    fd_text               = p101_env_event_split(&cursor);
-    line_text             = p101_env_event_split(&cursor);
-    record->function_name = p101_env_event_split(&cursor);
-    record->file_name     = cursor;
-
-    if(kind_text == NULL || fd_text == NULL || line_text == NULL || record->function_name == NULL || record->file_name == NULL)
-    {
-        return P101_ENV_EVENT_PARSE_MALFORMED;
-    }
-
-    if(strcmp(kind_text, "OPEN") == 0)
-    {
-        record->fd_kind = P101_ENV_EVENT_FD_OPEN;
-    }
-    else if(strcmp(kind_text, "CLOSE") == 0)
-    {
-        record->fd_kind = P101_ENV_EVENT_FD_CLOSE;
-    }
-    else
-    {
-        return P101_ENV_EVENT_PARSE_MALFORMED;
-    }
-
-    if(!p101_env_event_parse_long_field(fd_text, 0, P101_EVENT_PARSE_FD_MAX, &fd) || !p101_env_event_parse_long_field(line_text, 0, INT_MAX, &line_number))
-    {
-        return P101_ENV_EVENT_PARSE_MALFORMED;
-    }
-
-    record->record_kind = P101_ENV_EVENT_RECORD_FD;
-    record->fd          = (int)fd;
-    record->line_number = (int)line_number;
-    p101_env_event_unescape_field(record->function_name);
-    p101_env_event_unescape_field(record->file_name);
-
-    return P101_ENV_EVENT_PARSE_OK;
-}
-
-static p101_env_event_parse_status p101_env_event_parse_alloc(char *line, struct p101_env_event_record *record)
-{
-    char                       *cursor;
-    const char                 *kind_text;
-    char                       *new_ptr_text;
-    const char                 *size_text;
-    const char                 *line_text;
-    long                        line_number;
-    p101_env_event_parse_status status;
-
-    if(strncmp(line, "P101ALLOC\t", strlen("P101ALLOC\t")) != 0)
-    {
-        return P101_ENV_EVENT_PARSE_OTHER;
-    }
-
-    cursor = line + strlen("P101ALLOC\t");
-    status = p101_env_event_parse_version_metadata(&cursor, record);
-    if(status != P101_ENV_EVENT_PARSE_OK)
-    {
-        return status;
-    }
-
-    kind_text             = p101_env_event_split(&cursor);
-    record->ptr           = p101_env_event_split(&cursor);
-    new_ptr_text          = p101_env_event_split(&cursor);
-    size_text             = p101_env_event_split(&cursor);
-    line_text             = p101_env_event_split(&cursor);
-    record->function_name = p101_env_event_split(&cursor);
-    record->file_name     = cursor;
-
-    if(kind_text == NULL || record->ptr == NULL || new_ptr_text == NULL || size_text == NULL || line_text == NULL || record->function_name == NULL || record->file_name == NULL)
-    {
-        return P101_ENV_EVENT_PARSE_MALFORMED;
-    }
-
-    if(strcmp(kind_text, "ALLOC") == 0)
-    {
-        record->alloc_kind = P101_ENV_EVENT_ALLOC_ALLOC;
-    }
-    else if(strcmp(kind_text, "FREE") == 0)
-    {
-        record->alloc_kind = P101_ENV_EVENT_ALLOC_FREE;
-    }
-    else if(strcmp(kind_text, "REALLOC") == 0)
-    {
-        record->alloc_kind = P101_ENV_EVENT_ALLOC_REALLOC;
-    }
-    else
-    {
-        return P101_ENV_EVENT_PARSE_MALFORMED;
-    }
-
-    if(!p101_env_event_parse_size_field(size_text, &record->size) || !p101_env_event_parse_long_field(line_text, 0, INT_MAX, &line_number))
-    {
-        return P101_ENV_EVENT_PARSE_MALFORMED;
-    }
-
-    record->record_kind = P101_ENV_EVENT_RECORD_ALLOC;
-    record->new_ptr     = (strcmp(new_ptr_text, "-") == 0) ? NULL : new_ptr_text;
-    record->line_number = (int)line_number;
-    p101_env_event_unescape_field(record->ptr);
-    p101_env_event_unescape_field(record->new_ptr);
-    p101_env_event_unescape_field(record->function_name);
-    p101_env_event_unescape_field(record->file_name);
-
-    return P101_ENV_EVENT_PARSE_OK;
-}
-
-static p101_env_event_parse_status p101_env_event_parse_fork(char *line, struct p101_env_event_record *record)
-{
-    char                       *cursor;
-    const char                 *child_pid_text;
-    const char                 *line_text;
-    long                        line_number;
-    p101_env_event_parse_status status;
-
-    if(strncmp(line, "P101FORK\t", strlen("P101FORK\t")) != 0)
-    {
-        return P101_ENV_EVENT_PARSE_OTHER;
-    }
-
-    cursor = line + strlen("P101FORK\t");
-    status = p101_env_event_parse_version_metadata(&cursor, record);
-    if(status != P101_ENV_EVENT_PARSE_OK)
-    {
-        return status;
-    }
-
-    child_pid_text        = p101_env_event_split(&cursor);
-    line_text             = p101_env_event_split(&cursor);
-    record->function_name = p101_env_event_split(&cursor);
-    record->file_name     = cursor;
-
-    if(child_pid_text == NULL || line_text == NULL || record->function_name == NULL || record->file_name == NULL)
-    {
-        return P101_ENV_EVENT_PARSE_MALFORMED;
-    }
-
-    if(!p101_env_event_parse_long_field(child_pid_text, 0, LONG_MAX, &record->child_pid) || !p101_env_event_parse_long_field(line_text, 0, INT_MAX, &line_number))
-    {
-        return P101_ENV_EVENT_PARSE_MALFORMED;
-    }
-
-    record->record_kind = P101_ENV_EVENT_RECORD_FORK;
-    record->line_number = (int)line_number;
-    p101_env_event_unescape_field(record->function_name);
-    p101_env_event_unescape_field(record->file_name);
-
-    return P101_ENV_EVENT_PARSE_OK;
-}
-
-static p101_env_event_parse_status p101_env_event_parse_spawn(char *line, struct p101_env_event_record *record)
-{
-    char                       *cursor;
-    const char                 *child_pid_text;
-    const char                 *line_text;
-    long                        line_number;
-    p101_env_event_parse_status status;
-
-    if(strncmp(line, "P101SPAWN\t", strlen("P101SPAWN\t")) != 0)
-    {
-        return P101_ENV_EVENT_PARSE_OTHER;
-    }
-
-    cursor = line + strlen("P101SPAWN\t");
-    status = p101_env_event_parse_version_metadata(&cursor, record);
-    if(status != P101_ENV_EVENT_PARSE_OK)
-    {
-        return status;
-    }
-
-    child_pid_text        = p101_env_event_split(&cursor);
-    line_text             = p101_env_event_split(&cursor);
-    record->function_name = p101_env_event_split(&cursor);
-    record->file_name     = p101_env_event_split(&cursor);
-    record->target        = cursor;
-
-    if(child_pid_text == NULL || line_text == NULL || record->function_name == NULL || record->file_name == NULL || record->target == NULL)
-    {
-        return P101_ENV_EVENT_PARSE_MALFORMED;
-    }
-
-    if(!p101_env_event_parse_long_field(child_pid_text, 0, LONG_MAX, &record->child_pid) || !p101_env_event_parse_long_field(line_text, 0, INT_MAX, &line_number))
-    {
-        return P101_ENV_EVENT_PARSE_MALFORMED;
-    }
-
-    record->record_kind = P101_ENV_EVENT_RECORD_SPAWN;
-    record->line_number = (int)line_number;
-    p101_env_event_unescape_field(record->function_name);
-    p101_env_event_unescape_field(record->file_name);
-    p101_env_event_unescape_field(record->target);
-
-    return P101_ENV_EVENT_PARSE_OK;
-}
-
-static p101_env_event_parse_status p101_env_event_parse_exec(char *line, struct p101_env_event_record *record)
-{
-    char                       *cursor;
-    const char                 *fd_text;
-    const char                 *cloexec_text;
-    const char                 *line_text;
-    long                        fd;
-    long                        cloexec;
-    long                        line_number;
-    p101_env_event_parse_status status;
-
-    if(strncmp(line, "P101EXEC\t", strlen("P101EXEC\t")) != 0)
-    {
-        return P101_ENV_EVENT_PARSE_OTHER;
-    }
-
-    cursor = line + strlen("P101EXEC\t");
-    status = p101_env_event_parse_version_metadata(&cursor, record);
-    if(status != P101_ENV_EVENT_PARSE_OK)
-    {
-        return status;
-    }
-
-    fd_text               = p101_env_event_split(&cursor);
-    cloexec_text          = p101_env_event_split(&cursor);
-    line_text             = p101_env_event_split(&cursor);
-    record->function_name = p101_env_event_split(&cursor);
-    record->file_name     = p101_env_event_split(&cursor);
-    record->target        = cursor;
-
-    if(fd_text == NULL || cloexec_text == NULL || line_text == NULL || record->function_name == NULL || record->file_name == NULL || record->target == NULL)
-    {
-        return P101_ENV_EVENT_PARSE_MALFORMED;
-    }
-
-    if(!p101_env_event_parse_long_field(fd_text, 0, P101_EVENT_PARSE_FD_MAX, &fd) || !p101_env_event_parse_long_field(cloexec_text, 0, 1, &cloexec) || !p101_env_event_parse_long_field(line_text, 0, INT_MAX, &line_number))
-    {
-        return P101_ENV_EVENT_PARSE_MALFORMED;
-    }
-
-    record->record_kind = P101_ENV_EVENT_RECORD_EXEC;
-    record->fd          = (int)fd;
-    record->cloexec     = (int)cloexec;
-    record->line_number = (int)line_number;
-    p101_env_event_unescape_field(record->function_name);
-    p101_env_event_unescape_field(record->file_name);
-    p101_env_event_unescape_field(record->target);
-
-    return P101_ENV_EVENT_PARSE_OK;
-}
-
-static p101_env_event_parse_status p101_env_event_parse_exec_failure(char *line, struct p101_env_event_record *record)
-{
-    char                       *cursor;
-    const char                 *line_text;
-    long                        line_number;
-    p101_env_event_parse_status status;
-
-    if(strncmp(line, "P101EXECFAIL\t", strlen("P101EXECFAIL\t")) != 0)
-    {
-        return P101_ENV_EVENT_PARSE_OTHER;
-    }
-
-    cursor = line + strlen("P101EXECFAIL\t");
-    status = p101_env_event_parse_version_metadata(&cursor, record);
-    if(status != P101_ENV_EVENT_PARSE_OK)
-    {
-        return status;
-    }
-
-    line_text             = p101_env_event_split(&cursor);
-    record->function_name = p101_env_event_split(&cursor);
-    record->file_name     = p101_env_event_split(&cursor);
-    record->target        = cursor;
-
-    if(line_text == NULL || record->function_name == NULL || record->file_name == NULL || record->target == NULL || !p101_env_event_parse_long_field(line_text, 0, INT_MAX, &line_number))
-    {
-        return P101_ENV_EVENT_PARSE_MALFORMED;
-    }
-
-    record->record_kind = P101_ENV_EVENT_RECORD_EXEC_FAIL;
-    record->line_number = (int)line_number;
-    p101_env_event_unescape_field(record->function_name);
-    p101_env_event_unescape_field(record->file_name);
-    p101_env_event_unescape_field(record->target);
-
-    return P101_ENV_EVENT_PARSE_OK;
-}
-
-static p101_env_event_parse_status p101_env_event_parse_call(char *line, struct p101_env_event_record *record)
-{
-    char                       *cursor;
-    const char                 *kind_text;
-    const char                 *line_text;
-    long                        line_number;
-    p101_env_event_parse_status status;
-
-    if(strncmp(line, "P101CALL\t", strlen("P101CALL\t")) != 0)
-    {
-        return P101_ENV_EVENT_PARSE_OTHER;
-    }
-
-    cursor = line + strlen("P101CALL\t");
-    status = p101_env_event_parse_version_metadata(&cursor, record);
-    if(status != P101_ENV_EVENT_PARSE_OK)
-    {
-        return status;
-    }
-
-    kind_text             = p101_env_event_split(&cursor);
-    line_text             = p101_env_event_split(&cursor);
-    record->function_name = p101_env_event_split(&cursor);
-    record->call_name     = p101_env_event_split(&cursor);
-    record->arguments     = p101_env_event_split(&cursor);
-    record->result        = p101_env_event_split(&cursor);
-    record->file_name     = p101_env_event_split(&cursor);
-
-    if(cursor != NULL || kind_text == NULL || line_text == NULL || record->function_name == NULL || record->call_name == NULL || record->arguments == NULL || record->result == NULL || record->file_name == NULL)
-    {
-        return P101_ENV_EVENT_PARSE_MALFORMED;
-    }
-
-    if(strcmp(kind_text, "ENTER") == 0)
-    {
-        record->call_kind = P101_ENV_EVENT_CALL_ENTER;
-    }
-    else if(strcmp(kind_text, "EXIT") == 0)
-    {
-        record->call_kind = P101_ENV_EVENT_CALL_EXIT;
-    }
-    else
-    {
-        return P101_ENV_EVENT_PARSE_MALFORMED;
-    }
-
-    if(!p101_env_event_parse_long_field(line_text, 0, INT_MAX, &line_number))
-    {
-        return P101_ENV_EVENT_PARSE_MALFORMED;
-    }
-
-    record->record_kind = P101_ENV_EVENT_RECORD_CALL;
-    record->line_number = (int)line_number;
-    p101_env_event_unescape_field(record->function_name);
-    p101_env_event_unescape_field(record->call_name);
-    p101_env_event_unescape_field(record->arguments);
-    p101_env_event_unescape_field(record->result);
-    p101_env_event_unescape_field(record->file_name);
-
-    return P101_ENV_EVENT_PARSE_OK;
 }
 
 static void p101_env_fd_notify(const struct p101_env *env, p101_env_fd_event event, int fd, const char *file_name, const char *function_name, int line_number)
@@ -2912,6 +1861,66 @@ void p101_env_track_realloc(const struct p101_env *env, const void *ptr, const v
     }
 
     p101_env_alloc_notify(env, P101_ENV_ALLOC_REALLOC, ptr, new_ptr, size, file_name, function_name, line_number);
+}
+
+void p101_env_track_resource(const struct p101_env *env, p101_tool_event_resource_kind event, const char *resource_class, const char *resource_id, const char *related_id, size_t size, const char *metadata, const char *file_name, const char *function_name,
+                             int line_number)
+{
+    if(env == NULL || env->resource_observer == NULL || resource_class == NULL || resource_class[0] == '\0' || resource_id == NULL || resource_id[0] == '\0')
+    {
+        return;
+    }
+
+    env->resource_observer(env, event, resource_class, resource_id, related_id, size, metadata, file_name, function_name, line_number, env->resource_observer_data);
+}
+
+void p101_env_pointer_resource_id(char *text, size_t text_size, const void *resource)
+{
+    if(text == NULL || text_size < P101_ENV_POINTER_RESOURCE_ID_SIZE)
+    {
+        return;
+    }
+
+    snprintf(text, P101_ENV_POINTER_RESOURCE_ID_SIZE, "%p", resource);    // NOLINT(cert-err33-c)
+}
+
+void p101_env_track_pointer_resource(const struct p101_env *env, p101_tool_event_resource_kind event, const char *resource_class, const void *resource, const void *related_resource, size_t size, const char *metadata, const char *file_name,
+                                     const char *function_name, int line_number)
+{
+    char        resource_id[P101_POINTER_BUF_LEN];
+    char        related_id[P101_POINTER_BUF_LEN];
+    const char *related_text;
+
+    if(resource == NULL)
+    {
+        return;
+    }
+
+    p101_env_pointer_resource_id(resource_id, sizeof(resource_id), resource);
+    related_text = NULL;
+    if(related_resource != NULL)
+    {
+        p101_env_pointer_resource_id(related_id, sizeof(related_id), related_resource);
+        related_text = related_id;
+    }
+    p101_env_track_resource(env, event, resource_class, resource_id, related_text, size, metadata, file_name, function_name, line_number);
+}
+
+void p101_env_track_integer_resource(const struct p101_env *env, p101_tool_event_resource_kind event, const char *resource_class, intmax_t resource, intmax_t related_resource, size_t size, const char *metadata, const char *file_name, const char *function_name,
+                                     int line_number)
+{
+    char        resource_id[P101_POINTER_BUF_LEN];
+    char        related_id[P101_POINTER_BUF_LEN];
+    const char *related_text;
+
+    snprintf(resource_id, sizeof(resource_id), "%" PRIdMAX, resource);    // NOLINT(cert-err33-c)
+    related_text = NULL;
+    if(event == P101_TOOL_EVENT_RESOURCE_REPLACE || event == P101_TOOL_EVENT_RESOURCE_TRANSFER)
+    {
+        snprintf(related_id, sizeof(related_id), "%" PRIdMAX, related_resource);    // NOLINT(cert-err33-c)
+        related_text = related_id;
+    }
+    p101_env_track_resource(env, event, resource_class, resource_id, related_text, size, metadata, file_name, function_name, line_number);
 }
 
 void p101_env_track_open(const struct p101_env *env, int fd, const char *file_name, const char *function_name, int line_number)

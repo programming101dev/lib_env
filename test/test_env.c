@@ -1,10 +1,24 @@
 #include "p101_env/env.h"
+#include <p101_tool_event/event.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
 static int failures;
+
+enum
+{
+    CONCURRENT_THREAD_COUNT      = 4,
+    CONCURRENT_EVENTS_PER_THREAD = 250
+};
+
+struct concurrent_writer
+{
+    struct p101_env *env;
+    size_t           thread_number;
+};
 
 #define EXPECT(condition)                                                                                                                                                                                                                                          \
     do                                                                                                                                                                                                                                                             \
@@ -35,25 +49,25 @@ static void make_path(char path[], size_t path_size, const char *suffix)
 
 static void test_event_parser_contract(void)
 {
-    struct p101_env_event_record record;
+    struct p101_tool_event_record record;
     char                         escaped[] = "P101CALL\t2\t42\t1\t100\t200\tENTER\t7\tfun\\tname\tcall\\\\name\targ\\ntext\t-\tfile\\tname.c\n";
     char                         exec_fail[] = "P101EXECFAIL\t2\t42\t2\t101\t201\t9\tp101_execv\tfile.c\t/bin/missing\n";
     char                         spawn[] = "P101SPAWN\t2\t42\t3\t102\t202\t43\t10\tp101_posix_spawn\tspawn.c\t/bin/true\n";
     char                         v1[]      = "P101FD\t1\t42\tOPEN\t3\t7\tmain\tfile.c\n";
 
-    EXPECT(p101_env_parse_event_line(escaped, &record) == P101_ENV_EVENT_PARSE_OK);
+    EXPECT(p101_tool_event_parse_line(escaped, &record) == P101_TOOL_EVENT_PARSE_OK);
     EXPECT(strcmp(record.function_name, "fun\tname") == 0);
     EXPECT(strcmp(record.call_name, "call\\name") == 0);
     EXPECT(strcmp(record.arguments, "arg\ntext") == 0);
     EXPECT(strcmp(record.file_name, "file\tname.c") == 0);
-    EXPECT(p101_env_parse_event_line(exec_fail, &record) == P101_ENV_EVENT_PARSE_OK);
-    EXPECT(record.record_kind == P101_ENV_EVENT_RECORD_EXEC_FAIL);
+    EXPECT(p101_tool_event_parse_line(exec_fail, &record) == P101_TOOL_EVENT_PARSE_OK);
+    EXPECT(record.record_kind == P101_TOOL_EVENT_RECORD_EXEC_FAIL);
     EXPECT(strcmp(record.target, "/bin/missing") == 0);
-    EXPECT(p101_env_parse_event_line(spawn, &record) == P101_ENV_EVENT_PARSE_OK);
-    EXPECT(record.record_kind == P101_ENV_EVENT_RECORD_SPAWN);
+    EXPECT(p101_tool_event_parse_line(spawn, &record) == P101_TOOL_EVENT_PARSE_OK);
+    EXPECT(record.record_kind == P101_TOOL_EVENT_RECORD_SPAWN);
     EXPECT(record.child_pid == 43);
     EXPECT(strcmp(record.target, "/bin/true") == 0);
-    EXPECT(p101_env_parse_event_line(v1, &record) == P101_ENV_EVENT_PARSE_BAD_VERSION);
+    EXPECT(p101_tool_event_parse_line(v1, &record) == P101_TOOL_EVENT_PARSE_BAD_VERSION);
 }
 
 static void test_reader_terminates_on_error(void)
@@ -63,7 +77,7 @@ static void test_reader_terminates_on_error(void)
 
     err = p101_error_create(false);
     EXPECT(err != NULL);
-    EXPECT(p101_env_read_event_line(err, NULL, line, sizeof(line)) == P101_ENV_EVENT_LINE_ERROR);
+    EXPECT(p101_tool_event_read_line(err, NULL, line, sizeof(line)) == P101_TOOL_EVENT_LINE_ERROR);
     EXPECT(line[0] == '\0');
     EXPECT(p101_error_has_error(err));
     p101_error_destroy(err);
@@ -73,7 +87,7 @@ static void test_long_record_round_trip(void)
 {
     struct p101_error           *err;
     struct p101_env             *env;
-    struct p101_env_event_record record;
+    struct p101_tool_event_record record;
     FILE                        *stream;
     char                        *line;
     char                         long_name[1500];
@@ -93,12 +107,207 @@ static void test_long_record_round_trip(void)
     p101_env_track_open(env, 9, "file.c", long_name, 8);
     rewind(stream);
 
-    EXPECT(p101_env_read_event_line(err, stream, line, 4096U) == P101_ENV_EVENT_LINE_OK);
-    EXPECT(p101_env_parse_event_line(line, &record) == P101_ENV_EVENT_PARSE_OK);
+    EXPECT(p101_tool_event_read_line(err, stream, line, 4096U) == P101_TOOL_EVENT_LINE_OK);
+    EXPECT(p101_tool_event_parse_line(line, &record) == P101_TOOL_EVENT_PARSE_OK);
     EXPECT(strcmp(record.function_name, long_name) == 0);
 
     free(line);
     fclose(stream);
+    p101_env_destroy(env);
+    p101_error_destroy(err);
+}
+
+static void test_generic_resource_round_trip(void)
+{
+    struct p101_error        *err;
+    struct p101_env          *env;
+    struct p101_tool_event_record  record;
+    FILE                     *stream;
+    char                      line[2048];
+
+    err    = p101_error_create(false);
+    env    = p101_env_create(err, NULL);
+    stream = tmpfile();
+    EXPECT(err != NULL);
+    EXPECT(env != NULL);
+    EXPECT(stream != NULL);
+
+    p101_env_set_resource_log(env, stream);
+    p101_env_track_resource(env, P101_TOOL_EVENT_RESOURCE_ACQUIRE, "mapping", "0x1000", NULL, 4096U, "private", "mapping.c", "map_file", 27);
+    rewind(stream);
+
+    EXPECT(p101_tool_event_read_line(err, stream, line, sizeof(line)) == P101_TOOL_EVENT_LINE_OK);
+    EXPECT(p101_tool_event_parse_line(line, &record) == P101_TOOL_EVENT_PARSE_OK);
+    EXPECT(record.record_kind == P101_TOOL_EVENT_RECORD_RESOURCE);
+    EXPECT(record.resource_kind == P101_TOOL_EVENT_RESOURCE_ACQUIRE);
+    EXPECT(strcmp(record.resource_class, "mapping") == 0);
+    EXPECT(strcmp(record.resource_id, "0x1000") == 0);
+    EXPECT(record.related_id == NULL);
+    EXPECT(record.size == 4096U);
+    EXPECT(strcmp(record.metadata, "private") == 0);
+    EXPECT(strcmp(record.function_name, "map_file") == 0);
+    EXPECT(strcmp(record.file_name, "mapping.c") == 0);
+    EXPECT(record.line_number == 27);
+
+    fclose(stream);
+    p101_env_destroy(env);
+    p101_error_destroy(err);
+}
+
+static void test_event_write_failure_is_sticky(void)
+{
+    struct p101_error *err;
+    struct p101_env   *env;
+    FILE              *stream;
+
+    err    = p101_error_create(false);
+    env    = p101_env_create(err, NULL);
+    stream = fopen(__FILE__, "r");
+    EXPECT(err != NULL);
+    EXPECT(env != NULL);
+    EXPECT(stream != NULL);
+
+    if(env != NULL && stream != NULL)
+    {
+        p101_env_set_resource_log(env, stream);
+        p101_env_track_resource(env, P101_TOOL_EVENT_RESOURCE_ACQUIRE, "test", "write-failure", NULL, 0U, NULL, __FILE__, __func__, __LINE__);
+        EXPECT(p101_env_event_log_failed(env) != 0);
+        EXPECT(p101_env_event_log_errno(env) != 0);
+        p101_env_clear_event_log_error(env);
+        EXPECT(p101_env_event_log_failed(env) == 0);
+    }
+
+    if(stream != NULL)
+    {
+        fclose(stream);
+    }
+    p101_env_destroy(env);
+    p101_error_destroy(err);
+}
+
+static void *write_concurrent_events(void *data)
+{
+    struct concurrent_writer *writer;
+    char                      resource_id[64];
+    size_t                    event_number;
+
+    writer = (struct concurrent_writer *)data;
+    for(event_number = 0U; event_number < CONCURRENT_EVENTS_PER_THREAD; event_number++)
+    {
+        snprintf(resource_id, sizeof(resource_id), "%zu:%zu", writer->thread_number, event_number);
+        p101_env_track_resource(writer->env, P101_TOOL_EVENT_RESOURCE_ACQUIRE, "concurrency-test", resource_id, NULL, 0U, NULL, __FILE__, __func__, __LINE__);
+    }
+
+    return NULL;
+}
+
+static void test_concurrent_event_sequences(void)
+{
+    struct concurrent_writer writers[CONCURRENT_THREAD_COUNT];
+    pthread_t                 threads[CONCURRENT_THREAD_COUNT];
+    struct p101_tool_event_record  record;
+    struct p101_error        *err;
+    struct p101_env          *env;
+    FILE                     *stream;
+    unsigned char            *seen;
+    char                      line[2048];
+    size_t                    count;
+    size_t                    index;
+    int                       created[CONCURRENT_THREAD_COUNT] = {0};
+
+    err    = p101_error_create(false);
+    env    = p101_env_create(err, NULL);
+    stream = tmpfile();
+    seen   = (unsigned char *)calloc((size_t)CONCURRENT_THREAD_COUNT * CONCURRENT_EVENTS_PER_THREAD, sizeof(*seen));
+    EXPECT(err != NULL);
+    EXPECT(env != NULL);
+    EXPECT(stream != NULL);
+    EXPECT(seen != NULL);
+
+    if(err == NULL || env == NULL || stream == NULL || seen == NULL)
+    {
+        free(seen);
+        if(stream != NULL)
+        {
+            fclose(stream);
+        }
+        p101_env_destroy(env);
+        p101_error_destroy(err);
+        return;
+    }
+
+    p101_env_set_resource_log(env, stream);
+    for(index = 0U; index < CONCURRENT_THREAD_COUNT; index++)
+    {
+        writers[index].env           = env;
+        writers[index].thread_number = index;
+        created[index]                = pthread_create(&threads[index], NULL, write_concurrent_events, &writers[index]) == 0 ? 1 : 0;
+        EXPECT(created[index] != 0);
+    }
+
+    for(index = 0U; index < CONCURRENT_THREAD_COUNT; index++)
+    {
+        if(created[index] != 0)
+        {
+            EXPECT(pthread_join(threads[index], NULL) == 0);
+        }
+    }
+
+    EXPECT(p101_env_event_log_failed(env) == 0);
+    rewind(stream);
+    count = 0U;
+    while(p101_tool_event_read_line(err, stream, line, sizeof(line)) == P101_TOOL_EVENT_LINE_OK)
+    {
+        EXPECT(p101_tool_event_parse_line(line, &record) == P101_TOOL_EVENT_PARSE_OK);
+        EXPECT(record.record_kind == P101_TOOL_EVENT_RECORD_RESOURCE);
+        EXPECT(record.sequence > 0U);
+        EXPECT(record.sequence <= (size_t)CONCURRENT_THREAD_COUNT * CONCURRENT_EVENTS_PER_THREAD);
+        if(record.sequence > 0U && record.sequence <= (size_t)CONCURRENT_THREAD_COUNT * CONCURRENT_EVENTS_PER_THREAD)
+        {
+            EXPECT(seen[record.sequence - 1U] == 0U);
+            seen[record.sequence - 1U] = 1U;
+        }
+        count++;
+    }
+    EXPECT(count == (size_t)CONCURRENT_THREAD_COUNT * CONCURRENT_EVENTS_PER_THREAD);
+    EXPECT(p101_error_has_no_error(err));
+
+    free(seen);
+    fclose(stream);
+    p101_env_destroy(env);
+    p101_error_destroy(err);
+}
+
+static void test_short_fault_action_repeats(void)
+{
+    struct p101_env_fault_action action;
+    struct p101_error           *err;
+    struct p101_env             *env;
+
+    EXPECT(setenv("P101_FAULT_CALL", "2", 1) == 0);
+    EXPECT(setenv("P101_FAULT_MODE", "short", 1) == 0);
+    EXPECT(setenv("P101_FAULT_AMOUNT", "3", 1) == 0);
+    EXPECT(setenv("P101_FAULT_REPEAT", "2", 1) == 0);
+    EXPECT(setenv("P101_FAULT_NAME", "p101_read", 1) == 0);
+    err = p101_error_create(false);
+    env = p101_env_create(err, NULL);
+    EXPECT(unsetenv("P101_FAULT_CALL") == 0);
+    EXPECT(unsetenv("P101_FAULT_MODE") == 0);
+    EXPECT(unsetenv("P101_FAULT_AMOUNT") == 0);
+    EXPECT(unsetenv("P101_FAULT_REPEAT") == 0);
+    EXPECT(unsetenv("P101_FAULT_NAME") == 0);
+    EXPECT(err != NULL);
+    EXPECT(env != NULL);
+
+    EXPECT(p101_env_check_fault_action(env, "p101_write", &action) == 0);
+    EXPECT(p101_env_check_fault_action(env, "p101_read", &action) == 0);
+    EXPECT(p101_env_check_fault_action(env, "p101_read", &action) != 0);
+    EXPECT(action.kind == P101_ENV_FAULT_SHORT);
+    EXPECT(action.amount == 3U);
+    EXPECT(p101_env_check_fault_action(env, "p101_read", &action) != 0);
+    EXPECT(action.kind == P101_ENV_FAULT_SHORT);
+    EXPECT(p101_env_check_fault_action(env, "p101_read", &action) == 0);
+
     p101_env_destroy(env);
     p101_error_destroy(err);
 }
@@ -132,7 +341,7 @@ static void test_dup_keeps_owned_destination(void)
     if(stream != NULL)
     {
         EXPECT(fgets(line, sizeof(line), stream) != NULL);
-        EXPECT(strncmp(line, "P101FD\t2\t", strlen("P101FD\t2\t")) == 0);
+        EXPECT(strncmp(line, "P101FD\t3\t", strlen("P101FD\t3\t")) == 0);
         fclose(stream);
     }
     remove(path);
@@ -165,7 +374,7 @@ static void test_observers_remain_independent(void)
     if(stream != NULL)
     {
         EXPECT(fgets(line, sizeof(line), stream) != NULL);
-        EXPECT(strncmp(line, "P101ALLOC\t2\t", strlen("P101ALLOC\t2\t")) == 0);
+        EXPECT(strncmp(line, "P101ALLOC\t3\t", strlen("P101ALLOC\t3\t")) == 0);
         fclose(stream);
     }
     remove(path);
@@ -211,7 +420,7 @@ static void test_dup_keeps_fault_configuration(void)
     if(stream != NULL)
     {
         EXPECT(fgets(line, sizeof(line), stream) != NULL);
-        EXPECT(strncmp(line, "P101FAULT\t1\t", strlen("P101FAULT\t1\t")) == 0);
+        EXPECT(strncmp(line, "P101FAULT\t2\t", strlen("P101FAULT\t2\t")) == 0);
         fclose(stream);
     }
     remove(path);
@@ -226,6 +435,10 @@ int main(void)
     test_event_parser_contract();
     test_reader_terminates_on_error();
     test_long_record_round_trip();
+    test_generic_resource_round_trip();
+    test_event_write_failure_is_sticky();
+    test_concurrent_event_sequences();
+    test_short_fault_action_repeats();
     test_dup_keeps_owned_destination();
     test_observers_remain_independent();
     test_dup_keeps_fault_configuration();

@@ -1,0 +1,25 @@
+# lib_env is below lib_c and lib_posix in the dependency graph. These exact
+# file boundaries avoid an upward dependency cycle.
+src/env.c:*:clock_gettime
+src/env.c:*:fclose
+src/env.c:*:fcntl
+src/env.c:*:fflush
+src/env.c:*:fopen
+src/env.c:*:fprintf
+src/env.c:p101_env_destroy:flockfile
+src/env.c:p101_env_destroy:funlockfile
+src/env.c:*:free
+src/env.c:*:getenv
+src/env.c:*:getpid
+src/env.c:*:getrlimit
+src/env.c:*:malloc
+src/env.c:*:memcpy
+src/env.c:*:memset
+src/env.c:*:setvbuf
+src/env.c:*:snprintf
+src/env.c:*:strcmp
+src/env.c:*:strlen
+src/env.c:*:strtoul
+src/env.c:*:sysconf
+src/env.c:p101_env_log_fault_hit:flockfile
+src/env.c:p101_env_log_fault_hit:funlockfile

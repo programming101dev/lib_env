@@ -71,7 +71,7 @@ This compiles through the strict analysis pipeline: the clang-format check, clan
 ## **Testing**
 
 `./check.sh` is the one command to run before you submit: the format check, the strict build, the tests, and a short fuzz smoke run, with a single PASS/FAIL at the end.
-The test tree covers v2 parsing, escaped-field round trips, long records, reader
+The event-library test tree covers v2 compatibility, v3 round trips, long records, reader
 errors, duplicated log destinations, and independent resource observers. The
 fuzz harness feeds arbitrary records through the shared event parser.
 
@@ -110,6 +110,8 @@ Fault injection:
 P101_FAULT_CALL=3 ./program
 P101_FAULT_CALL=2 P101_FAULT_ERRNO=5 P101_FAULT_NAME=open ./program
 P101_FAULT_CALL=2 P101_FAULT_LOG=fault.log ./program
+P101_FAULT_CALL=2 P101_FAULT_NAME=read P101_FAULT_MODE=short P101_FAULT_AMOUNT=4 ./program
+P101_FAULT_CALL=2 P101_FAULT_MODE=eintr P101_FAULT_REPEAT=3 ./program
 ```
 
 - `P101_FAULT_CALL=N` enables injection and fails the Nth matching
@@ -118,8 +120,15 @@ P101_FAULT_CALL=2 P101_FAULT_LOG=fault.log ./program
   default is `EIO`.
 - `P101_FAULT_NAME=name` optionally narrows counting to one wrapper name, such
   as `open`, `read`, or `socket`.
+- `P101_FAULT_MODE=error|eintr|timeout|short` selects a hard failure, an
+  `EINTR` failure, a timeout-style failure, or a successful short I/O. Short
+  mode is currently implemented by `read`, `write`, `pread`, and `pwrite`.
+- `P101_FAULT_AMOUNT=N` sets the maximum byte count passed to a wrapper during
+  short-I/O injection. The default is one byte.
+- `P101_FAULT_REPEAT=N` injects the selected behavior for `N` consecutive
+  matching calls. This makes retry loops and repeated interruption testable.
 - `P101_FAULT_LOG=path` records when a configured fault actually fires:
-  `P101FAULT<TAB>1<TAB>pid<TAB>call-index<TAB>call-name<TAB>errno`. The
+  `P101FAULT<TAB>2<TAB>pid<TAB>call-index<TAB>call-name<TAB>errno<TAB>mode<TAB>amount`. The
   `error-path-walk` tool uses this to stop automatically when it has walked
   past the last fault-capable call.
 
@@ -133,7 +142,8 @@ P101_CALL_LOG=calls.log P101_CALL_LOG_ARGS=1 P101_CALL_LOG_RESULT=1 ./program
 - `P101_RESOURCE_LOG=path` enables the resource event log read by
   `resource-tracker`. The stream includes descriptor records (`P101FD`) and
   allocation records (`P101ALLOC`) when code uses the p101 descriptor and heap
-  wrappers.
+  wrappers, plus generic lifecycle records (`P101RESOURCE`) emitted through the
+  `P101_TRACK_RESOURCE_*` macros.
 - `P101_CALL_LOG=path` enables structured `P101CALL` records.
 - `P101_CALL_LOG_ENTER=0` or `P101_CALL_LOG_EXIT=0` can suppress enter/exit
   records.
@@ -142,6 +152,21 @@ P101_CALL_LOG=calls.log P101_CALL_LOG_ARGS=1 P101_CALL_LOG_RESULT=1 ./program
 
 Use `-` as the log path to write to `stderr`; otherwise the env opens the file
 in append mode and closes it in `p101_env_destroy()`.
+
+Event sequence allocation is atomic, and `lib_tool_event` publishes each complete
+record as one locked stream write. If any event or fault-log write fails,
+`p101_env_event_log_failed()` remains true until
+`p101_env_clear_event_log_error()` is called;
+`p101_env_event_log_errno()` returns the first recorded error. Destruction also
+prints a warning to `stderr`, so a partial instrumentation log cannot look
+silently complete. The environment's other mutable configuration remains
+caller-synchronized. One env per thread remains the general rule; the built-in
+event-log observers are the narrow exception and may emit concurrently after
+configuration.
+
+All event consumers use `P101_TOOL_EVENT_LINE_MAX_BYTES` from `lib_tool_event` as the shared record
+ceiling. A record that does not fit, contains an embedded NUL, or has an
+unsupported version is malformed input rather than a partially parsed event.
 
 ## **Installing**
 

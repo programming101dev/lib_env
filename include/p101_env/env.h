@@ -18,14 +18,18 @@
  */
 
 /*
- * Thread-safety: a struct p101_env is NOT thread-safe and must not be
- * shared between threads. The convention is one env object per thread
- * (p101_env_dup() exists to make that easy), matching the
- * one-error-per-thread convention in p101_error.
+ * Thread-safety: mutable configuration, custom observers/tracers, and the
+ * in-process descriptor ledger are caller-synchronized. The convention is one
+ * env object per thread (p101_env_dup() exists to make that easy), matching the
+ * one-error-per-thread convention in p101_error. After configuration, the
+ * built-in event-log observers may be called concurrently: sequence allocation
+ * is atomic and lib_tool_event serializes each complete record.
  */
 
 #include <p101_error/error.h>
+#include <p101_tool_event/event.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 
 #ifndef P101_ATTR_MALLOC
@@ -113,117 +117,16 @@ extern "C"
     void p101_env_trace_call(const struct p101_env *env, const char *call_name, const char *arguments, const char *file_name, const char *function_name, int line_number);
     void p101_env_trace_call_exit(const struct p101_env *env, const char *call_name, const char *result, const char *file_name, const char *function_name, int line_number);
 
-    /*
-     * Shared event-log input primitive for tools that consume P101FD,
-     * P101ALLOC, P101FORK, P101EXEC, P101EXECFAIL, P101CALL, and future p101
-     * event records.
-     *
-     * It reads one physical line from stream into line, always NUL-terminates
-     * when line_size is non-zero, and treats embedded NUL bytes or lines that do
-     * not fit as malformed. The caller still decides whether a malformed line
-     * belongs to its schema; this function only answers whether the bytes are a
-     * trustworthy text record.
-     */
-    typedef enum
-    {
-        P101_ENV_EVENT_LINE_EOF = 0,
-        P101_ENV_EVENT_LINE_OK,
-        P101_ENV_EVENT_LINE_MALFORMED,
-        P101_ENV_EVENT_LINE_ERROR
-    } p101_env_event_line_status;
-
-    p101_env_event_line_status p101_env_read_event_line(struct p101_error *err, FILE *stream, char *line, size_t line_size);
-
-    /*
-     * Event log format version. Version 2 is the only supported schema. It adds
-     * per-env sequence and timestamp fields immediately after pid:
-     *
-     *   MAGIC<TAB>2<TAB>pid<TAB>seq<TAB>mono_ns<TAB>wall_unix_ns<TAB>...
-     *
-     * P101_EVENT_LOG_VERSION is accepted only when set to 2. Invalid versions
-     * return EINVAL and leave the current version unchanged.
-     */
-    typedef enum
-    {
-        P101_ENV_EVENT_LOG_VERSION_2 = 2
-    } p101_env_event_log_version;
-
     int p101_env_set_event_log_version(struct p101_env *env, int version);
     int p101_env_get_event_log_version(const struct p101_env *env);
-
-    typedef enum
-    {
-        P101_ENV_EVENT_PARSE_OTHER = 0,
-        P101_ENV_EVENT_PARSE_OK,
-        P101_ENV_EVENT_PARSE_MALFORMED,
-        P101_ENV_EVENT_PARSE_BAD_VERSION
-    } p101_env_event_parse_status;
-
-    typedef enum
-    {
-        P101_ENV_EVENT_RECORD_FD = 0,
-        P101_ENV_EVENT_RECORD_ALLOC,
-        P101_ENV_EVENT_RECORD_FORK,
-        P101_ENV_EVENT_RECORD_SPAWN,
-        P101_ENV_EVENT_RECORD_EXEC,
-        P101_ENV_EVENT_RECORD_EXEC_FAIL,
-        P101_ENV_EVENT_RECORD_CALL
-    } p101_env_event_record_kind;
-
-    typedef enum
-    {
-        P101_ENV_EVENT_FD_OPEN = 0,
-        P101_ENV_EVENT_FD_CLOSE
-    } p101_env_event_fd_kind;
-
-    typedef enum
-    {
-        P101_ENV_EVENT_ALLOC_ALLOC = 0,
-        P101_ENV_EVENT_ALLOC_FREE,
-        P101_ENV_EVENT_ALLOC_REALLOC
-    } p101_env_event_alloc_kind;
-
-    typedef enum
-    {
-        P101_ENV_EVENT_CALL_ENTER = 0,
-        P101_ENV_EVENT_CALL_EXIT
-    } p101_env_event_call_kind;
-
-    struct p101_env_event_record
-    {
-        p101_env_event_record_kind record_kind;
-        long                       pid;
-        long                       child_pid;
-        size_t                     sequence;
-        size_t                     monotonic_ns;
-        size_t                     wall_unix_ns;
-        int                        monotonic_ns_available;
-        int                        wall_unix_ns_available;
-        int                        fd;
-        int                        cloexec;
-        p101_env_event_fd_kind     fd_kind;
-        p101_env_event_alloc_kind  alloc_kind;
-        p101_env_event_call_kind   call_kind;
-        char                      *ptr;     /* points into the mutable line buffer */
-        char                      *new_ptr; /* points into the mutable line buffer, or NULL */
-        char                      *target;  /* points into the mutable line buffer */
-        size_t                     size;
-        int                        line_number;
-        char                      *function_name; /* points into the mutable line buffer */
-        char                      *call_name;     /* points into the mutable line buffer */
-        char                      *arguments;     /* points into the mutable line buffer */
-        char                      *result;        /* points into the mutable line buffer */
-        char                      *file_name;     /* points into the mutable line buffer */
-    };
-
-    /* Splits and unescapes recognized records in place. String members in
-     * record point into line and remain valid only while that buffer lives. */
-    p101_env_event_parse_status p101_env_parse_event_line(char *line, struct p101_env_event_record *record);
-    int                         p101_env_event_line_is_ours(const char *line);
-    char                       *p101_env_event_split(char **cursor);
-    void                        p101_env_event_unescape_field(char *field);
-    int                         p101_env_event_parse_size_field(const char *text, size_t *out);
-    const char                 *p101_env_event_parse_status_name(p101_env_event_parse_status status);
+    /*
+     * Event observers cannot safely raise into an application error object.
+     * Instead, write failure is sticky and queryable. A clean analysis is only
+     * trustworthy when p101_env_event_log_failed() remains false.
+     */
+    int  p101_env_event_log_failed(const struct p101_env *env);
+    int  p101_env_event_log_errno(const struct p101_env *env);
+    void p101_env_clear_event_log_error(struct p101_env *env);
 
     /* A short label for this env (typically a thread name). When set, the
      * default tracer prints it, so interleaved traces from one-env-per-thread
@@ -245,14 +148,33 @@ extern "C"
      * The environment bridge also understands P101_FAULT_LOG=path. When a
      * configured fault actually fires it writes:
      *
-     *   P101FAULT<TAB>1<TAB>pid<TAB>call-index<TAB>call-name<TAB>errno
+     *   P101FAULT<TAB>2<TAB>pid<TAB>call-index<TAB>call-name<TAB>errno<TAB>mode<TAB>amount
      *
      * This is intentionally separate from P101_RESOURCE_LOG; launchers use it
      * as a control signal to stop after the last fault-capable call.
+     * P101_FAULT_MODE may be error, eintr, timeout, or short;
+     * P101_FAULT_AMOUNT bounds supported short-I/O calls and
+     * P101_FAULT_REPEAT exercises repeated retry paths.
      */
     typedef int (*p101_env_fault_injector)(const struct p101_env *env, const char *call_name, void *user_data);
+
+    typedef enum
+    {
+        P101_ENV_FAULT_NONE = 0,
+        P101_ENV_FAULT_ERROR,
+        P101_ENV_FAULT_SHORT
+    } p101_env_fault_kind;
+
+    struct p101_env_fault_action
+    {
+        p101_env_fault_kind kind;
+        int                 errnum;
+        size_t              amount;
+    };
+
     void p101_env_set_fault_injector(struct p101_env *env, p101_env_fault_injector injector, void *user_data);
     int  p101_env_check_fault(const struct p101_env *env, const char *call_name);
+    int  p101_env_check_fault_action(const struct p101_env *env, const char *call_name, struct p101_env_fault_action *action);
 
     /*
      * File-descriptor ledger (opt-in). When enabled, wrappers that open or
@@ -304,18 +226,18 @@ extern "C"
      * The convenience sink built on that observer: one line per event, in the
      * format the resource-tracker analyzer reads.
      *
-     *     P101FD<TAB>2<TAB>pid<TAB>seq<TAB>mono_ns<TAB>wall_ns<TAB>OPEN|CLOSE<TAB>fd<TAB>line<TAB>function<TAB>file
-     *     P101FORK<TAB>2<TAB>parent-pid<TAB>seq<TAB>mono_ns<TAB>wall_ns<TAB>child-pid<TAB>line<TAB>function<TAB>file
-     *     P101SPAWN<TAB>2<TAB>parent-pid<TAB>seq<TAB>mono_ns<TAB>wall_ns<TAB>child-pid<TAB>line<TAB>function<TAB>file<TAB>target
-     *     P101EXEC<TAB>2<TAB>pid<TAB>seq<TAB>mono_ns<TAB>wall_ns<TAB>fd<TAB>cloexec<TAB>line<TAB>function<TAB>file<TAB>target
-     *     P101EXECFAIL<TAB>2<TAB>pid<TAB>seq<TAB>mono_ns<TAB>wall_ns<TAB>line<TAB>function<TAB>file<TAB>target
+     *     P101FD<TAB>3<TAB>pid<TAB>context<TAB>seq<TAB>mono_ns<TAB>wall_ns<TAB>OPEN|CLOSE<TAB>fd<TAB>line<TAB>function<TAB>file
+     *     P101FORK<TAB>3<TAB>parent-pid<TAB>context<TAB>seq<TAB>mono_ns<TAB>wall_ns<TAB>child-pid<TAB>line<TAB>function<TAB>file
+     *     P101SPAWN<TAB>3<TAB>parent-pid<TAB>context<TAB>seq<TAB>mono_ns<TAB>wall_ns<TAB>child-pid<TAB>line<TAB>function<TAB>file<TAB>target
+     *     P101EXEC<TAB>3<TAB>pid<TAB>context<TAB>seq<TAB>mono_ns<TAB>wall_ns<TAB>fd<TAB>cloexec<TAB>line<TAB>function<TAB>file<TAB>target
+     *     P101EXECFAIL<TAB>3<TAB>pid<TAB>context<TAB>seq<TAB>mono_ns<TAB>wall_ns<TAB>line<TAB>function<TAB>file<TAB>target
      *
      * The P101 record prefixes let the log share a stream with ordinary output
-     * and still be grepped back out; the 2 is the supported format version.
+     * and still be grepped back out; 3 is the emitted format version.
      * Free-form fields are escaped so embedded tabs and newlines cannot change
      * the record shape.
-     * Each line is a single fwrite() followed by a flush, so the log survives a
-     * crash and a fork does not split a line in half -- and because the pid is
+     * Each record is written and flushed before returning, so the log survives
+     * a crash -- and because the pid is
      * on every line, the analyzer can tell the child's descriptors from the
      * parent's. The fork record lets an analyzer seed the child's descriptor
      * table from the descriptors live in the parent at fork time. A spawn
@@ -353,6 +275,25 @@ extern "C"
     void p101_env_track_free(const struct p101_env *env, const void *ptr, const char *file_name, const char *function_name, int line_number);
     void p101_env_track_realloc(const struct p101_env *env, const void *ptr, const void *new_ptr, size_t size, const char *file_name, const char *function_name, int line_number);
 
+    /*
+     * Generic non-FD/non-heap resource lifecycle events. Resource classes and
+     * ids are stable text chosen by the wrapper (for example "mmap" plus the
+     * mapped address). The observer is deliberately generic so new wrappers do
+     * not require another event schema.
+     */
+    typedef void (*p101_env_resource_observer)(const struct p101_env *env, p101_tool_event_resource_kind event, const char *resource_class, const char *resource_id, const char *related_id, size_t size, const char *metadata, const char *file_name,
+                                               const char *function_name, int line_number, void *user_data);
+
+    void p101_env_set_resource_observer(struct p101_env *env, p101_env_resource_observer observer, void *user_data);
+    void p101_env_set_resource_log(struct p101_env *env, FILE *stream);
+    void p101_env_track_resource(const struct p101_env *env, p101_tool_event_resource_kind event, const char *resource_class, const char *resource_id, const char *related_id, size_t size, const char *metadata, const char *file_name, const char *function_name,
+                                 int line_number);
+    void p101_env_pointer_resource_id(char *text, size_t text_size, const void *resource);
+    void p101_env_track_pointer_resource(const struct p101_env *env, p101_tool_event_resource_kind event, const char *resource_class, const void *resource, const void *related_resource, size_t size, const char *metadata, const char *file_name,
+                                         const char *function_name, int line_number);
+    void p101_env_track_integer_resource(const struct p101_env *env, p101_tool_event_resource_kind event, const char *resource_class, intmax_t resource, intmax_t related_resource, size_t size, const char *metadata, const char *file_name,
+                                         const char *function_name, int line_number);
+
 #define P101_TRACE(env) p101_env_trace((env), __FILE__, __func__, __LINE__)
 #define P101_TRACE_EXIT(env) p101_env_trace_exit((env), __FILE__, __func__, __LINE__)
 #define P101_CALL_ENTER(env, call_name, arguments) p101_env_trace_call((env), (call_name), (arguments), __FILE__, __func__, __LINE__)
@@ -366,6 +307,23 @@ extern "C"
 #define P101_TRACK_ALLOC(env, ptr, size) p101_env_track_alloc((env), (ptr), (size), __FILE__, __func__, __LINE__)
 #define P101_TRACK_FREE(env, ptr) p101_env_track_free((env), (ptr), __FILE__, __func__, __LINE__)
 #define P101_TRACK_REALLOC(env, ptr, new_ptr, size) p101_env_track_realloc((env), (ptr), (new_ptr), (size), __FILE__, __func__, __LINE__)
+#define P101_TRACK_RESOURCE_ACQUIRE(env, resource_class, resource_id, size, metadata) p101_env_track_resource((env), P101_TOOL_EVENT_RESOURCE_ACQUIRE, (resource_class), (resource_id), NULL, (size), (metadata), __FILE__, __func__, __LINE__)
+#define P101_TRACK_RESOURCE_RELEASE(env, resource_class, resource_id, metadata) p101_env_track_resource((env), P101_TOOL_EVENT_RESOURCE_RELEASE, (resource_class), (resource_id), NULL, 0U, (metadata), __FILE__, __func__, __LINE__)
+#define P101_TRACK_RESOURCE_REPLACE(env, resource_class, resource_id, related_id, size, metadata) p101_env_track_resource((env), P101_TOOL_EVENT_RESOURCE_REPLACE, (resource_class), (resource_id), (related_id), (size), (metadata), __FILE__, __func__, __LINE__)
+#define P101_TRACK_RESOURCE_TRANSFER(env, resource_class, resource_id, related_id, metadata) p101_env_track_resource((env), P101_TOOL_EVENT_RESOURCE_TRANSFER, (resource_class), (resource_id), (related_id), 0U, (metadata), __FILE__, __func__, __LINE__)
+#define P101_ENV_POINTER_RESOURCE_ID_SIZE (2U + (sizeof(uintptr_t) * 2U) + 1U)
+#define P101_TRACK_POINTER_RESOURCE_ACQUIRE(env, resource_class, resource, size, metadata) p101_env_track_pointer_resource((env), P101_TOOL_EVENT_RESOURCE_ACQUIRE, (resource_class), (resource), NULL, (size), (metadata), __FILE__, __func__, __LINE__)
+#define P101_TRACK_POINTER_RESOURCE_RELEASE(env, resource_class, resource, metadata) p101_env_track_pointer_resource((env), P101_TOOL_EVENT_RESOURCE_RELEASE, (resource_class), (resource), NULL, 0U, (metadata), __FILE__, __func__, __LINE__)
+#define P101_TRACK_POINTER_RESOURCE_REPLACE(env, resource_class, resource, related_resource, size, metadata)                                                                                                                                                       \
+    p101_env_track_pointer_resource((env), P101_TOOL_EVENT_RESOURCE_REPLACE, (resource_class), (resource), (related_resource), (size), (metadata), __FILE__, __func__, __LINE__)
+#define P101_TRACK_POINTER_RESOURCE_TRANSFER(env, resource_class, resource, related_resource, metadata)                                                                                                                                                            \
+    p101_env_track_pointer_resource((env), P101_TOOL_EVENT_RESOURCE_TRANSFER, (resource_class), (resource), (related_resource), 0U, (metadata), __FILE__, __func__, __LINE__)
+#define P101_TRACK_INTEGER_RESOURCE_ACQUIRE(env, resource_class, resource, size, metadata) p101_env_track_integer_resource((env), P101_TOOL_EVENT_RESOURCE_ACQUIRE, (resource_class), (intmax_t)(resource), 0, (size), (metadata), __FILE__, __func__, __LINE__)
+#define P101_TRACK_INTEGER_RESOURCE_RELEASE(env, resource_class, resource, metadata) p101_env_track_integer_resource((env), P101_TOOL_EVENT_RESOURCE_RELEASE, (resource_class), (intmax_t)(resource), 0, 0U, (metadata), __FILE__, __func__, __LINE__)
+#define P101_TRACK_INTEGER_RESOURCE_REPLACE(env, resource_class, resource, related_resource, size, metadata)                                                                                                                                                       \
+    p101_env_track_integer_resource((env), P101_TOOL_EVENT_RESOURCE_REPLACE, (resource_class), (intmax_t)(resource), (intmax_t)(related_resource), (size), (metadata), __FILE__, __func__, __LINE__)
+#define P101_TRACK_INTEGER_RESOURCE_TRANSFER(env, resource_class, resource, related_resource, metadata)                                                                                                                                                            \
+    p101_env_track_integer_resource((env), P101_TOOL_EVENT_RESOURCE_TRANSFER, (resource_class), (intmax_t)(resource), (intmax_t)(related_resource), 0U, (metadata), __FILE__, __func__, __LINE__)
 
 #ifdef __cplusplus
 }

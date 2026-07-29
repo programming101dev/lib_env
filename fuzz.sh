@@ -53,15 +53,18 @@ else
 fi
 
 cands=()
-[ -n "${FUZZ_CC:-}" ] && cands+=("$FUZZ_CC")
-if [ -f "$compiler_list" ]; then
-  while IFS= read -r candidate || [ -n "$candidate" ]; do
-    candidate="${candidate%%#*}"
-    [ -n "${candidate//[[:space:]]/}" ] || continue
-    case "$(basename "$candidate")" in clang*) cands+=("$candidate") ;; esac
-  done < "$compiler_list"
+if [ -n "${FUZZ_CC:-}" ]; then
+  cands+=("$FUZZ_CC")
+else
+  if [ -f "$compiler_list" ]; then
+    while IFS= read -r candidate || [ -n "$candidate" ]; do
+      candidate="${candidate%%#*}"
+      [ -n "${candidate//[[:space:]]/}" ] || continue
+      case "$(basename "$candidate")" in clang*) cands+=("$candidate") ;; esac
+    done < "$compiler_list"
+  fi
+  cands+=("$default_clang" "$homebrew_clang")
 fi
-cands+=("$default_clang" "$homebrew_clang")
 
 # find a compiler that can actually link a libFuzzer target in this language
 probe() {
@@ -118,6 +121,9 @@ if p101_workspace_root="$(p101_find_workspace_root)"; then
   done
   for lib in "$p101_workspace_root"/libraries/*; do
     [ -d "$lib" ] || continue
+    # Prefer libraries built by the same compiler. On macOS, mixing an
+    # Apple-Clang ASan dylib with a Homebrew-Clang fuzzer loads two incompatible
+    # sanitizer runtimes.
     [ -d "$lib/$p101_preferred_build_dir" ] && p101_local_link_dirs+=("$lib/$p101_preferred_build_dir")
     if [ -f "$lib/.last-build-dir" ]; then
       p101_last_build_dir="$(cat "$lib/.last-build-dir")"
@@ -133,7 +139,10 @@ if p101_workspace_root="$(p101_find_workspace_root)"; then
   [ -n "$p101_local_link_dirs_joined" ] && p101_path_args+=("-DP101_PUBLIC_LINK_DIRS=$p101_local_link_dirs_joined")
 fi
 
-cmake -S fuzz -B "$bd" -D"${cc_var}=$CC" ${p101_path_args[@]+"${p101_path_args[@]}"} >/dev/null
+# A prior fuzz configure may have cached a sibling library from a different
+# build directory. Re-resolve library paths on every run so a freshly rebuilt
+# workspace cannot execute against stale p101 binaries.
+cmake -S fuzz -B "$bd" -U 'P101_*_LIBRARY' -U '_P101_LIB_*' -D"${cc_var}=$CC" ${p101_path_args[@]+"${p101_path_args[@]}"} >/dev/null
 cmake --build "$bd"
 
 bin="$bd/fuzz"

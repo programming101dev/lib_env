@@ -14,18 +14,22 @@ endif()
 
 add_library(p101_env_under_test STATIC
         "${CMAKE_CURRENT_SOURCE_DIR}/../src/env.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../lib_tool_event/src/event.c"
         "${CMAKE_CURRENT_SOURCE_DIR}/../../lib_error/src/check.c"
         "${CMAKE_CURRENT_SOURCE_DIR}/../../lib_error/src/error.c"
 )
 target_include_directories(p101_env_under_test PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/../include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../lib_tool_event/include"
         "${CMAKE_CURRENT_SOURCE_DIR}/../../lib_error/include"
 )
 target_compile_definitions(p101_env_under_test PRIVATE _POSIX_C_SOURCE=200809L)
 target_compile_options(p101_env_under_test PRIVATE ${P101_TEST_COVERAGE_FLAGS})
 
+find_package(Threads REQUIRED)
+
 add_executable(test_env test_env.c)
-target_link_libraries(test_env PRIVATE p101_env_under_test m)
+target_link_libraries(test_env PRIVATE p101_env_under_test m Threads::Threads)
 target_compile_definitions(test_env PRIVATE _POSIX_C_SOURCE=200809L)
 target_compile_options(test_env PRIVATE ${P101_TEST_COVERAGE_FLAGS})
 target_link_options(test_env PRIVATE ${P101_TEST_COVERAGE_FLAGS})

@@ -41,4 +41,5 @@ set(p101_env_HEADERS
 # Linked libraries required for this project
 set(p101_env_LINK_LIBRARIES
         p101_error
+        p101_tool_event
 )

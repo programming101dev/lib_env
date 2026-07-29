@@ -14,11 +14,13 @@ set(P101_FUZZ_FLAGS -fsanitize=fuzzer,address,undefined -g -O1)
 add_executable(fuzz
         fuzz_env.c
         "${CMAKE_CURRENT_SOURCE_DIR}/../src/env.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../lib_tool_event/src/event.c"
         "${CMAKE_CURRENT_SOURCE_DIR}/../../lib_error/src/check.c"
         "${CMAKE_CURRENT_SOURCE_DIR}/../../lib_error/src/error.c"
 )
 target_include_directories(fuzz PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/../include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../lib_tool_event/include"
         "${CMAKE_CURRENT_SOURCE_DIR}/../../lib_error/include"
 )
 target_compile_definitions(fuzz PRIVATE _POSIX_C_SOURCE=200809L)
