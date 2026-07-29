@@ -516,7 +516,7 @@ static void p101_env_configure_fault_from_environment(struct p101_env *env, stru
         p101_env_fault_state_destroy(state);
         return;
     }
-    state->amount = (size_t)amount;
+    state->amount = amount;
 
     repeat_text = getenv("P101_FAULT_REPEAT");
     repeat      = p101_env_parse_unsigned_environment(repeat_text, 1UL, &ok);
