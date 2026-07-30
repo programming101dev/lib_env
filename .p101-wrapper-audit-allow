@@ -1,5 +1,11 @@
 # lib_env is below lib_c and lib_posix in the dependency graph. These exact
 # file boundaries avoid an upward dependency cycle.
+src/env.c:*:atomic_compare_exchange_strong
+src/env.c:*:atomic_exchange
+src/env.c:*:atomic_fetch_add
+src/env.c:*:atomic_init
+src/env.c:*:atomic_load
+src/env.c:*:atomic_store
 src/env.c:*:clock_gettime
 src/env.c:*:fclose
 src/env.c:*:fcntl
@@ -23,3 +29,15 @@ src/env.c:*:strtoul
 src/env.c:*:sysconf
 src/env.c:p101_env_log_fault_hit:flockfile
 src/env.c:p101_env_log_fault_hit:funlockfile
+# User-supplied observer and tracer callbacks are intentional indirect-call
+# boundaries, not wrapper bypasses.
+src/env.c:p101_env_alloc_notify:alloc_observer
+src/env.c:p101_env_call_notify:call_observer
+src/env.c:p101_env_check_fault:fault_injector
+src/env.c:p101_env_check_fault_action:fault_injector
+src/env.c:p101_env_fd_notify:fd_observer
+src/env.c:p101_env_trace:tracer
+src/env.c:p101_env_trace_call:tracer
+src/env.c:p101_env_trace_call_exit:exit_tracer
+src/env.c:p101_env_trace_exit:exit_tracer
+src/env.c:p101_env_track_resource:resource_observer
