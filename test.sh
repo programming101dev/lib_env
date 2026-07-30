@@ -44,6 +44,14 @@ ccbase="$(basename "$comp")"
 
 case "$main_bd" in build-*) sfx="${main_bd#build-}" ;; *) sfx="$ccbase" ;; esac
 test_bd="test/build-${sfx}"
+expected_test_source="$(CDPATH='' cd test && pwd)"
+if [ -f "$test_bd/CMakeCache.txt" ]; then
+  cached_test_source="$(sed -n 's/^CMAKE_HOME_DIRECTORY:INTERNAL=//p' "$test_bd/CMakeCache.txt" | head -1)"
+  if [ -n "$cached_test_source" ] && [ "$cached_test_source" != "$expected_test_source" ]; then
+    echo ">> removing test cache moved from $cached_test_source"
+    rm -rf "$test_bd"
+  fi
+fi
 cov_arg="-DP101_TEST_COVERAGE=OFF"
 [ "$coverage" -eq 1 ] && cov_arg="-DP101_TEST_COVERAGE=ON"
 sanitizer_flags="$(sed -n 's/^DETECTED_SANITIZERS:STRING=//p' "$main_bd/CMakeCache.txt" | head -1)"

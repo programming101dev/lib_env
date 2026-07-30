@@ -48,14 +48,20 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
             case P101_TOOL_EVENT_RECORD_EXEC_FAIL:
             case P101_TOOL_EVENT_RECORD_ALLOC:
             case P101_TOOL_EVENT_RECORD_CALL:
+            case P101_TOOL_EVENT_RECORD_RESOURCE:
             {
                 require(record.file_name != NULL);
                 require(record.function_name != NULL);
                 break;
             }
-            default:
+            case P101_TOOL_EVENT_RECORD_COMPLETE:
             {
-                abort();
+                require(record.write_failed == 0 || record.write_failed == 1);
+                if(record.write_failed == 0)
+                {
+                    require(record.write_errno == 0);
+                }
+                break;
             }
         }
     }

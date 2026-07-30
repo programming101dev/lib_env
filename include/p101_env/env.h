@@ -58,6 +58,14 @@ extern "C"
     /* line_number is int to match __LINE__ and p101_error's line numbers. */
     typedef void (*p101_env_tracer)(const struct p101_env *env, const char *file_name, const char *function_name, int line_number);
 
+    typedef struct p101_env_trace_scope
+    {
+        const struct p101_env *env;
+        const char            *file_name;
+        const char            *function_name;
+        int                    line_number;
+    } p101_env_trace_scope;
+
     struct p101_env *p101_env_create(struct p101_error *err, p101_env_tracer tracer) P101_ATTR_MALLOC P101_ATTR_WARN_UNUSED_RESULT;
     struct p101_env *p101_env_dup(struct p101_error *err, const struct p101_env *env) P101_ATTR_MALLOC P101_ATTR_WARN_UNUSED_RESULT;
     void             p101_env_destroy(struct p101_env *env);
@@ -65,6 +73,7 @@ extern "C"
     void             p101_env_set_tracer(struct p101_env *env, p101_env_tracer tracer);
     void             p101_env_default_tracer(const struct p101_env *env, const char *file_name, const char *function_name, int line_number);
     void             p101_env_trace(const struct p101_env *env, const char *file_name, const char *function_name, int line_number);
+    void             p101_env_trace_scope_cleanup(p101_env_trace_scope *scope);
 
     /* State for the INSTALLED TRACER only (call depth, an output stream, a
      * filter...) -- not a general-purpose stash for application data. The
@@ -74,9 +83,9 @@ extern "C"
     void *p101_env_get_tracer_data(const struct p101_env *env);
 
     /* Exit tracing. P101_TRACE fires on function ENTRY; call P101_TRACE_EXIT at
-     * the return points and install an exit tracer to get paired enter/leave
-     * events -- enough to build a call tree or time a call. A plain entry-only
-     * tracer simply leaves the exit tracer NULL. */
+     * every return point, or use P101_TRACE_SCOPE for an automatic exit on
+     * ordinary scope departure. Cleanup handlers do not run after longjmp,
+     * _Exit, abort, or process termination. */
     void            p101_env_set_exit_tracer(struct p101_env *env, p101_env_tracer tracer);
     p101_env_tracer p101_env_get_exit_tracer(const struct p101_env *env);
     void            p101_env_trace_exit(const struct p101_env *env, const char *file_name, const char *function_name, int line_number);
@@ -117,8 +126,6 @@ extern "C"
     void p101_env_trace_call(const struct p101_env *env, const char *call_name, const char *arguments, const char *file_name, const char *function_name, int line_number);
     void p101_env_trace_call_exit(const struct p101_env *env, const char *call_name, const char *result, const char *file_name, const char *function_name, int line_number);
 
-    int p101_env_set_event_log_version(struct p101_env *env, int version);
-    int p101_env_get_event_log_version(const struct p101_env *env);
     /*
      * Event observers cannot safely raise into an application error object.
      * Instead, write failure is sticky and queryable. A clean analysis is only
@@ -223,6 +230,16 @@ extern "C"
     void p101_env_set_fd_observer(struct p101_env *env, p101_env_fd_observer observer, void *user_data);
 
     /*
+     * Emit the final completeness record for every configured event stream.
+     * Normal owners get this automatically from p101_env_destroy(); wrappers
+     * that terminate without ordinary cleanup call it immediately before
+     * handing control to a process-termination function. Repeated calls in
+     * one process are harmless.
+     */
+    void p101_env_complete_event_streams(const struct p101_env *env);
+    void p101_env_after_fork_child(const struct p101_env *env);
+
+    /*
      * The convenience sink built on that observer: one line per event, in the
      * format the resource-tracker analyzer reads.
      *
@@ -247,7 +264,9 @@ extern "C"
      * descriptor it finds with its FD_CLOEXEC state, so an offline analyzer can
      * explain which tracked descriptors would cross into the new program
      * image. Passing NULL removes the sink. The stream is NOT closed by
-     * p101_env_destroy(); the caller owns it.
+     * p101_env_destroy(); the caller owns it. Keep a configured stream open
+     * until destruction writes its completion receipt, or clear the sink
+     * before closing the stream yourself.
      */
     void p101_env_set_fd_log(struct p101_env *env, FILE *stream);
     void p101_env_track_fork(const struct p101_env *env, long parent_pid, long child_pid, const char *file_name, const char *function_name, int line_number);
@@ -296,6 +315,13 @@ extern "C"
 
 #define P101_TRACE(env) p101_env_trace((env), __FILE__, __func__, __LINE__)
 #define P101_TRACE_EXIT(env) p101_env_trace_exit((env), __FILE__, __func__, __LINE__)
+#if defined(__GNUC__) || defined(__clang__)
+    #define P101_TRACE_SCOPE(env)                                                                                                                                                                                                                                  \
+        p101_env_trace_scope p101_trace_scope_guard __attribute__((cleanup(p101_env_trace_scope_cleanup))) = {(env), __FILE__, __func__, __LINE__};                                                                                                                \
+        p101_env_trace((env), __FILE__, __func__, __LINE__)
+#else
+    #error "P101_TRACE_SCOPE requires a compiler with cleanup attribute support"
+#endif
 #define P101_CALL_ENTER(env, call_name, arguments) p101_env_trace_call((env), (call_name), (arguments), __FILE__, __func__, __LINE__)
 #define P101_CALL_EXIT(env, call_name, result) p101_env_trace_call_exit((env), (call_name), (result), __FILE__, __func__, __LINE__)
 #define P101_TRACK_OPEN(env, fd) p101_env_track_open((env), (fd), __FILE__, __func__, __LINE__)

@@ -1,1 +1,1 @@
-P101CALL	2	42	2	101	201	ENTER	8	fun\tname	call\\name	arg\ntext	-	file\tname.c
+P101CALL	4	42	1	2	101	201	ENTER	8	fun\tname	call\\name	arg\ntext	-	file\tname.c

@@ -65,6 +65,16 @@ struct p101_env_event_state
     atomic_ullong      next_sequence;
     atomic_int         write_failed;
     atomic_int         write_errno;
+    atomic_int         stream_compromised;
+    atomic_int         first_write_errno;
+    atomic_long        completed_pid;
+    atomic_flag        emission_lock;
+
+    struct
+    {
+        atomic_long   pid;
+        atomic_ullong attempts;
+    } stream_counters[4];
 };
 
 struct p101_env
@@ -85,7 +95,6 @@ struct p101_env
     p101_env_call_observer       call_observer;
     void                        *call_observer_data; /* non-owned; state for the observer */
     unsigned                     call_log_options;
-    int                          event_log_version;
     struct p101_env_event_state *event_state;
     FILE                        *owned_fd_log_stream;
     char                        *owned_fd_log_path;
@@ -107,7 +116,6 @@ enum
 static void                         p101_env_init(struct p101_env *env, p101_env_tracer tracer);
 static void                         p101_env_init_event_state(struct p101_env *env, struct p101_error *err);
 static void                         p101_env_configure_from_environment(struct p101_env *env, struct p101_error *err);
-static void                         p101_env_configure_event_log_version_from_environment(struct p101_env *env, struct p101_error *err);
 static void                         p101_env_configure_fault_from_environment(struct p101_env *env, struct p101_error *err);
 static void                         p101_env_configure_fd_log_from_environment(struct p101_env *env, struct p101_error *err);
 static void                         p101_env_configure_call_log_from_environment(struct p101_env *env, struct p101_error *err);
@@ -126,15 +134,17 @@ static int                          p101_env_environment_fault_action(const stru
 static unsigned long                p101_env_parse_unsigned_environment(const char *text, unsigned long default_value, int *ok);
 static int                          p101_env_parse_int_environment(const char *text, int default_value, int *ok);
 static int                          p101_env_flag_on(const char *name, int default_value);
-static int                          p101_env_supported_event_log_version(long version);
-static int                          p101_env_effective_event_log_version(const struct p101_env *env);
 static unsigned long long           p101_env_next_event_sequence(const struct p101_env *env);
+static void                         p101_env_lock_event_emission(const struct p101_env *env);
+static void                         p101_env_unlock_event_emission(const struct p101_env *env);
 static void                         p101_env_prepare_event_record(const struct p101_env *env, struct p101_tool_event_output *record, p101_tool_event_record_kind kind, long pid);
 static void                         p101_env_record_event_write_failure(const struct p101_env *env);
-static void                         p101_env_write_event(const struct p101_env *env, FILE *stream, const struct p101_tool_event_output *record);
+static void                         p101_env_write_event(const struct p101_env *env, FILE *stream, const struct p101_tool_event_output *record, size_t stream_kind);
+static size_t                       p101_env_stream_attempts(const struct p101_env *env, size_t stream_kind, long pid);
+static void                         p101_env_write_completion_record(const struct p101_env *env, FILE *stream, size_t events_attempted);
 static void                         p101_env_fd_notify(const struct p101_env *env, p101_env_fd_event event, int fd, const char *file_name, const char *function_name, int line_number);
 static void                         p101_env_fd_log_observer(const struct p101_env *env, p101_env_fd_event event, int fd, const char *file_name, const char *function_name, int line_number, void *user_data);
-static void                         p101_env_fork_log(const struct p101_env *env, FILE *stream, long parent_pid, long child_pid, const char *file_name, const char *function_name, int line_number);
+static void                         p101_env_fork_log(const struct p101_env *env, FILE *stream, long parent_pid, long child_pid, const char *file_name, const char *function_name, int line_number, size_t stream_kind);
 static void                         p101_env_spawn_log(const struct p101_env *env, FILE *stream, long parent_pid, long child_pid, const char *target, const char *file_name, const char *function_name, int line_number);
 static long                         p101_env_exec_scan_limit(void);
 static void                         p101_env_exec_fd_log(const struct p101_env *env, FILE *stream, int fd, int cloexec, const char *target, const char *file_name, const char *function_name, int line_number);
@@ -232,7 +242,6 @@ struct p101_env *p101_env_dup(struct p101_error *err, const struct p101_env *env
         new_env->call_observer         = env->call_observer;
         new_env->call_observer_data    = env->call_observer_data;
         new_env->call_log_options      = env->call_log_options;
-        new_env->event_log_version     = env->event_log_version;
         new_env->owned_fd_log_stream   = NULL;
         new_env->owned_fd_log_path     = NULL;
         new_env->owned_call_log_stream = NULL;
@@ -256,6 +265,10 @@ struct p101_env *p101_env_dup(struct p101_error *err, const struct p101_env *env
             enable_alloc    = (env->alloc_observer == p101_env_alloc_log_observer && env->alloc_observer_data == env->owned_fd_log_stream) ? 1 : 0;
             enable_resource = (env->resource_observer == p101_env_resource_log_observer && env->resource_observer_data == env->owned_fd_log_stream) ? 1 : 0;
             p101_env_configure_resource_log_path(new_env, err, env->owned_fd_log_path, enable_fd, enable_alloc, enable_resource);
+            if(p101_error_has_error(err))
+            {
+                goto cleanup;
+            }
         }
 
         if(env->owned_call_log_stream != NULL)
@@ -265,6 +278,7 @@ struct p101_env *p101_env_dup(struct p101_error *err, const struct p101_env *env
 
         if(p101_error_has_error(err))
         {
+        cleanup:
             p101_env_destroy(new_env);
             new_env = NULL;
         }
@@ -275,6 +289,8 @@ struct p101_env *p101_env_dup(struct p101_error *err, const struct p101_env *env
 
 void p101_env_destroy(struct p101_env *env)
 {
+    p101_env_complete_event_streams(env);
+
     if(p101_env_event_log_failed(env))
     {
         int write_error;
@@ -338,7 +354,6 @@ static void p101_env_init(struct p101_env *env, p101_env_tracer tracer)
     env->call_observer          = NULL;
     env->call_observer_data     = NULL;
     env->call_log_options       = P101_ENV_CALL_LOG_DEFAULT;
-    env->event_log_version      = P101_TOOL_EVENT_LOG_VERSION_3;
     env->event_state            = NULL;
     env->owned_fd_log_stream    = NULL;
     env->owned_fd_log_path      = NULL;
@@ -361,17 +376,19 @@ static void p101_env_init_event_state(struct p101_env *env, struct p101_error *e
     atomic_init(&env->event_state->next_sequence, 0ULL);
     atomic_init(&env->event_state->write_failed, 0);
     atomic_init(&env->event_state->write_errno, 0);
+    atomic_init(&env->event_state->stream_compromised, 0);
+    atomic_init(&env->event_state->first_write_errno, 0);
+    atomic_init(&env->event_state->completed_pid, -1L);
+    atomic_flag_clear(&env->event_state->emission_lock);
+    for(size_t index = 0U; index < 4U; index++)
+    {
+        atomic_init(&env->event_state->stream_counters[index].pid, (long)getpid());
+        atomic_init(&env->event_state->stream_counters[index].attempts, 0ULL);
+    }
 }
 
 static void p101_env_configure_from_environment(struct p101_env *env, struct p101_error *err)
 {
-    p101_env_configure_event_log_version_from_environment(env, err);
-
-    if(p101_error_has_error(err))
-    {
-        return;
-    }
-
     p101_env_configure_fault_from_environment(env, err);
 
     if(p101_error_has_error(err))
@@ -387,30 +404,6 @@ static void p101_env_configure_from_environment(struct p101_env *env, struct p10
     }
 
     p101_env_configure_call_log_from_environment(env, err);
-}
-
-static void p101_env_configure_event_log_version_from_environment(struct p101_env *env, struct p101_error *err)
-{
-    const char *version_text;
-    int         version;
-    int         ok;
-
-    version_text = getenv("P101_TOOL_EVENT_LOG_VERSION");
-
-    if(version_text == NULL || version_text[0] == '\0')
-    {
-        return;
-    }
-
-    version = p101_env_parse_int_environment(version_text, P101_TOOL_EVENT_LOG_VERSION_3, &ok);
-
-    if(!ok || !p101_env_supported_event_log_version(version))
-    {
-        P101_ERROR_RAISE_ERRNO(err, EINVAL);
-        return;
-    }
-
-    env->event_log_version = version;
 }
 
 static void p101_env_configure_fault_from_environment(struct p101_env *env, struct p101_error *err)
@@ -1181,6 +1174,14 @@ void p101_env_trace(const struct p101_env *env, const char *file_name, const cha
     p101_env_call_notify(env, P101_ENV_CALL_ENTER, function_name, NULL, NULL, file_name, function_name, line_number);
 }
 
+void p101_env_trace_scope_cleanup(p101_env_trace_scope *scope)
+{
+    if(scope != NULL)
+    {
+        p101_env_trace_exit(scope->env, scope->file_name, scope->function_name, scope->line_number);
+    }
+}
+
 /* cppcheck-suppress funcArgNamesDifferentUnnamed */
 void p101_env_set_call_observer(struct p101_env *env, p101_env_call_observer observer, void *user_data)
 {
@@ -1247,39 +1248,6 @@ void p101_env_trace_call_exit(const struct p101_env *env, const char *call_name,
     }
 
     p101_env_call_notify(env, P101_ENV_CALL_EXIT, call_name, NULL, result, file_name, function_name, line_number);
-}
-
-int p101_env_set_event_log_version(struct p101_env *env, int version)
-{
-    int result;
-
-    p101_env_trace(env, __FILE__, __func__, __LINE__);
-
-    result = EINVAL;
-
-    if(env != NULL && p101_env_supported_event_log_version(version))
-    {
-        env->event_log_version = version;
-        result                 = 0;
-    }
-
-    return result;
-}
-
-int p101_env_get_event_log_version(const struct p101_env *env)
-{
-    int version;
-
-    p101_env_trace(env, __FILE__, __func__, __LINE__);
-
-    version = P101_TOOL_EVENT_LOG_VERSION_3;
-
-    if(env != NULL)
-    {
-        version = env->event_log_version;
-    }
-
-    return version;
 }
 
 /* cppcheck-suppress funcArgNamesDifferentUnnamed */
@@ -1478,21 +1446,6 @@ void p101_env_set_resource_log(struct p101_env *env, FILE *stream)
     p101_env_close_owned_resource_log_if_unused(env);
 }
 
-static int p101_env_supported_event_log_version(long version)
-{
-    return (version == P101_TOOL_EVENT_LOG_VERSION_3) ? 1 : 0;
-}
-
-static int p101_env_effective_event_log_version(const struct p101_env *env)
-{
-    if(env == NULL)
-    {
-        return P101_TOOL_EVENT_LOG_VERSION_3;
-    }
-
-    return env->event_log_version;
-}
-
 static unsigned long long p101_env_next_event_sequence(const struct p101_env *env)
 {
     if(env != NULL && env->event_state != NULL)
@@ -1501,6 +1454,33 @@ static unsigned long long p101_env_next_event_sequence(const struct p101_env *en
     }
 
     return 0ULL;
+}
+
+static void p101_env_lock_event_emission(const struct p101_env *env)
+{
+    if(env != NULL && env->event_state != NULL)
+    {
+        while(atomic_flag_test_and_set_explicit(&env->event_state->emission_lock, memory_order_acquire))
+        {
+        }
+    }
+}
+
+static void p101_env_unlock_event_emission(const struct p101_env *env)
+{
+    if(env != NULL && env->event_state != NULL)
+    {
+        atomic_flag_clear_explicit(&env->event_state->emission_lock, memory_order_release);
+    }
+}
+
+void p101_env_after_fork_child(const struct p101_env *env)
+{
+    if(env != NULL && env->event_state != NULL)
+    {
+        atomic_flag_clear_explicit(&env->event_state->emission_lock, memory_order_relaxed);
+        atomic_store_explicit(&env->event_state->completed_pid, -1L, memory_order_relaxed);
+    }
 }
 
 int p101_env_event_log_failed(const struct p101_env *env)
@@ -1525,6 +1505,7 @@ void p101_env_clear_event_log_error(struct p101_env *env)
 static void p101_env_record_event_write_failure(const struct p101_env *env)
 {
     int actual_error;
+    int expected_error;
 
     if(env == NULL || env->event_state == NULL)
     {
@@ -1534,14 +1515,149 @@ static void p101_env_record_event_write_failure(const struct p101_env *env)
     actual_error = errno == 0 ? EIO : errno;
     atomic_store_explicit(&env->event_state->write_errno, actual_error, memory_order_relaxed);
     atomic_store_explicit(&env->event_state->write_failed, 1, memory_order_release);
+    atomic_store_explicit(&env->event_state->stream_compromised, 1, memory_order_release);
+    expected_error = 0;
+    (void)atomic_compare_exchange_strong_explicit(&env->event_state->first_write_errno, &expected_error, actual_error, memory_order_relaxed, memory_order_relaxed);
 }
 
-static void p101_env_write_event(const struct p101_env *env, FILE *stream, const struct p101_tool_event_output *record)
+static void p101_env_write_event(const struct p101_env *env, FILE *stream, const struct p101_tool_event_output *record, size_t stream_kind)
 {
+    if(env != NULL && env->event_state != NULL && stream_kind < 4U)
+    {
+        long pid;
+        long counter_pid;
+
+        pid         = (long)getpid();
+        counter_pid = atomic_load_explicit(&env->event_state->stream_counters[stream_kind].pid, memory_order_relaxed);
+        if(counter_pid != pid)
+        {
+            atomic_store_explicit(&env->event_state->stream_counters[stream_kind].attempts, 0ULL, memory_order_relaxed);
+            atomic_store_explicit(&env->event_state->stream_counters[stream_kind].pid, pid, memory_order_relaxed);
+        }
+        (void)atomic_fetch_add_explicit(&env->event_state->stream_counters[stream_kind].attempts, 1ULL, memory_order_relaxed);
+    }
     if(p101_tool_event_write(stream, record) != 0)
     {
         p101_env_record_event_write_failure(env);
     }
+    p101_env_unlock_event_emission(env);
+}
+
+static size_t p101_env_stream_attempts(const struct p101_env *env, size_t stream_kind, long pid)
+{
+    if(env == NULL || env->event_state == NULL || stream_kind >= 4U || atomic_load_explicit(&env->event_state->stream_counters[stream_kind].pid, memory_order_relaxed) != pid)
+    {
+        return 0U;
+    }
+    return (size_t)atomic_load_explicit(&env->event_state->stream_counters[stream_kind].attempts, memory_order_relaxed);
+}
+
+void p101_env_complete_event_streams(const struct p101_env *env)
+{
+    FILE  *candidates[4];
+    FILE  *streams[4];
+    size_t candidate_count;
+    size_t stream_count;
+    long   pid;
+    long   previous_pid;
+
+    if(env == NULL || env->event_state == NULL)
+    {
+        return;
+    }
+
+    pid          = (long)getpid();
+    previous_pid = atomic_exchange_explicit(&env->event_state->completed_pid, pid, memory_order_acq_rel);
+    if(previous_pid == pid)
+    {
+        return;
+    }
+
+    candidate_count = 0U;
+    if(env->fd_observer == p101_env_fd_log_observer)
+    {
+        candidates[candidate_count++] = (FILE *)env->fd_observer_data;
+    }
+    if(env->alloc_observer == p101_env_alloc_log_observer)
+    {
+        candidates[candidate_count++] = (FILE *)env->alloc_observer_data;
+    }
+    if(env->resource_observer == p101_env_resource_log_observer)
+    {
+        candidates[candidate_count++] = (FILE *)env->resource_observer_data;
+    }
+    if(env->call_observer == p101_env_call_log_observer)
+    {
+        candidates[candidate_count++] = (FILE *)env->call_observer_data;
+    }
+
+    stream_count = 0U;
+    for(size_t candidate = 0U; candidate < candidate_count; candidate++)
+    {
+        bool duplicate;
+
+        if(candidates[candidate] == NULL)
+        {
+            continue;
+        }
+        duplicate = false;
+        for(size_t existing = 0U; existing < stream_count; existing++)
+        {
+            if(streams[existing] == candidates[candidate])
+            {
+                duplicate = true;
+                break;
+            }
+        }
+        if(!duplicate)
+        {
+            streams[stream_count++] = candidates[candidate];
+        }
+    }
+
+    for(size_t stream = 0U; stream < stream_count; stream++)
+    {
+        size_t events_attempted;
+
+        events_attempted = 0U;
+        if(env->fd_observer == p101_env_fd_log_observer && env->fd_observer_data == streams[stream])
+        {
+            events_attempted += p101_env_stream_attempts(env, 0U, pid);
+        }
+        if(env->alloc_observer == p101_env_alloc_log_observer && env->alloc_observer_data == streams[stream])
+        {
+            events_attempted += p101_env_stream_attempts(env, 1U, pid);
+        }
+        if(env->resource_observer == p101_env_resource_log_observer && env->resource_observer_data == streams[stream])
+        {
+            events_attempted += p101_env_stream_attempts(env, 2U, pid);
+        }
+        if(env->call_observer == p101_env_call_log_observer && env->call_observer_data == streams[stream])
+        {
+            events_attempted += p101_env_stream_attempts(env, 3U, pid);
+        }
+        p101_env_write_completion_record(env, streams[stream], events_attempted);
+    }
+}
+
+static void p101_env_write_completion_record(const struct p101_env *env, FILE *stream, size_t events_attempted)
+{
+    struct p101_tool_event_output record;
+
+    if(stream == NULL)
+    {
+        return;
+    }
+
+    p101_env_prepare_event_record(env, &record, P101_TOOL_EVENT_RECORD_COMPLETE, (long)getpid());
+    record.events_attempted = events_attempted;
+    record.write_failed     = atomic_load_explicit(&env->event_state->stream_compromised, memory_order_acquire);
+    record.write_errno      = record.write_failed != 0 ? atomic_load_explicit(&env->event_state->first_write_errno, memory_order_relaxed) : 0;
+    if(p101_tool_event_write(stream, &record) != 0)
+    {
+        p101_env_record_event_write_failure(env);
+    }
+    p101_env_unlock_event_emission(env);
 }
 
 static void p101_env_prepare_event_record(const struct p101_env *env, struct p101_tool_event_output *record, p101_tool_event_record_kind kind, long pid)
@@ -1549,8 +1665,9 @@ static void p101_env_prepare_event_record(const struct p101_env *env, struct p10
     struct timespec monotonic;
     struct timespec wall;
 
+    p101_env_lock_event_emission(env);
     memset(record, 0, sizeof(*record));
-    record->version     = p101_env_effective_event_log_version(env);
+    record->version     = P101_TOOL_EVENT_LOG_VERSION;
     record->record_kind = kind;
     record->pid         = pid;
     record->context_id  = (env == NULL || env->event_state == NULL) ? 0U : (size_t)env->event_state->context_id;
@@ -1589,10 +1706,10 @@ static void p101_env_fd_log_observer(const struct p101_env *env, p101_env_fd_eve
     record.line_number   = line_number;
     record.function_name = function_name;
     record.file_name     = file_name;
-    p101_env_write_event(env, stream, &record);
+    p101_env_write_event(env, stream, &record, 0U);
 }
 
-static void p101_env_fork_log(const struct p101_env *env, FILE *stream, long parent_pid, long child_pid, const char *file_name, const char *function_name, int line_number)
+static void p101_env_fork_log(const struct p101_env *env, FILE *stream, long parent_pid, long child_pid, const char *file_name, const char *function_name, int line_number, size_t stream_kind)
 {
     struct p101_tool_event_output record;
 
@@ -1606,7 +1723,7 @@ static void p101_env_fork_log(const struct p101_env *env, FILE *stream, long par
     record.line_number   = line_number;
     record.function_name = function_name;
     record.file_name     = file_name;
-    p101_env_write_event(env, stream, &record);
+    p101_env_write_event(env, stream, &record, stream_kind);
 }
 
 static void p101_env_spawn_log(const struct p101_env *env, FILE *stream, long parent_pid, long child_pid, const char *target, const char *file_name, const char *function_name, int line_number)
@@ -1624,7 +1741,7 @@ static void p101_env_spawn_log(const struct p101_env *env, FILE *stream, long pa
     record.line_number   = line_number;
     record.function_name = function_name;
     record.file_name     = file_name;
-    p101_env_write_event(env, stream, &record);
+    p101_env_write_event(env, stream, &record, 0U);
 }
 
 static long p101_env_exec_scan_limit(void)
@@ -1682,7 +1799,7 @@ static void p101_env_exec_fd_log(const struct p101_env *env, FILE *stream, int f
     record.line_number   = line_number;
     record.function_name = function_name;
     record.file_name     = file_name;
-    p101_env_write_event(env, stream, &record);
+    p101_env_write_event(env, stream, &record, 0U);
 }
 
 static void p101_env_exec_failure_log(const struct p101_env *env, FILE *stream, const char *target, const char *file_name, const char *function_name, int line_number)
@@ -1699,7 +1816,7 @@ static void p101_env_exec_failure_log(const struct p101_env *env, FILE *stream, 
     record.line_number   = line_number;
     record.function_name = function_name;
     record.file_name     = file_name;
-    p101_env_write_event(env, stream, &record);
+    p101_env_write_event(env, stream, &record, 0U);
 }
 
 static void p101_env_alloc_log_observer(const struct p101_env *env, p101_env_alloc_event event, const void *ptr, const void *new_ptr, size_t size, const char *file_name, const char *function_name, int line_number, void *user_data)
@@ -1739,7 +1856,7 @@ static void p101_env_alloc_log_observer(const struct p101_env *env, p101_env_all
     record.line_number   = line_number;
     record.function_name = function_name;
     record.file_name     = file_name;
-    p101_env_write_event(env, stream, &record);
+    p101_env_write_event(env, stream, &record, 1U);
 }
 
 static void p101_env_resource_log_observer(const struct p101_env *env, p101_tool_event_resource_kind event, const char *resource_class, const char *resource_id, const char *related_id, size_t size, const char *metadata, const char *file_name,
@@ -1764,7 +1881,7 @@ static void p101_env_resource_log_observer(const struct p101_env *env, p101_tool
     record.line_number    = line_number;
     record.function_name  = function_name;
     record.file_name      = file_name;
-    p101_env_write_event(env, stream, &record);
+    p101_env_write_event(env, stream, &record, 2U);
 }
 
 static void p101_env_call_log_observer(const struct p101_env *env, p101_env_call_event event, const char *call_name, const char *arguments, const char *result, const char *file_name, const char *function_name, int line_number, void *user_data)
@@ -1806,7 +1923,7 @@ static void p101_env_call_log_observer(const struct p101_env *env, p101_env_call
     record.arguments     = logged_arguments;
     record.result        = logged_result;
     record.file_name     = file_name;
-    p101_env_write_event(env, stream, &record);
+    p101_env_write_event(env, stream, &record, 3U);
 }
 
 static void p101_env_call_notify(const struct p101_env *env, p101_env_call_event event, const char *call_name, const char *arguments, const char *result, const char *file_name, const char *function_name, int line_number)
@@ -1996,23 +2113,24 @@ void p101_env_track_close(const struct p101_env *env, int fd, const char *file_n
 
 void p101_env_track_fork(const struct p101_env *env, long parent_pid, long child_pid, const char *file_name, const char *function_name, int line_number)
 {
-    FILE *stream;
+    FILE *call_stream;
+    FILE *resource_stream;
 
     if(env == NULL || parent_pid < 0 || child_pid < 0)
     {
         return;
     }
 
-    /* A fork is not an OPEN or CLOSE, so it is emitted only by the standard
-     * resource-log sink. Custom fd observers keep their simple two-event
-     * contract. */
-    if(env->fd_observer != p101_env_fd_log_observer)
+    resource_stream = env->fd_observer == p101_env_fd_log_observer ? (FILE *)env->fd_observer_data : NULL;
+    call_stream     = env->call_observer == p101_env_call_log_observer ? (FILE *)env->call_observer_data : NULL;
+    if(resource_stream != NULL)
     {
-        return;
+        p101_env_fork_log(env, resource_stream, parent_pid, child_pid, file_name, function_name, line_number, 0U);
     }
-
-    stream = (FILE *)env->fd_observer_data;
-    p101_env_fork_log(env, stream, parent_pid, child_pid, file_name, function_name, line_number);
+    if(call_stream != NULL && call_stream != resource_stream)
+    {
+        p101_env_fork_log(env, call_stream, parent_pid, child_pid, file_name, function_name, line_number, 3U);
+    }
 }
 
 void p101_env_track_spawn(const struct p101_env *env, long parent_pid, long child_pid, const char *target, const char *file_name, const char *function_name, int line_number)

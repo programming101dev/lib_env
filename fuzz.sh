@@ -93,6 +93,22 @@ fi
 echo ">> fuzzer compiler: $CC"
 bd="fuzz/build-$(basename "$CC")"
 
+# CMake cannot safely reuse a cache after a repository is moved or its compiler
+# changes. In particular, its automatic compiler-change reconfigure drops the
+# workspace include/link cache arguments passed below. Treat either mismatch as
+# a stale generated tree and configure it from scratch.
+expected_fuzz_source="$(CDPATH='' cd fuzz && pwd)"
+if [ -f "$bd/CMakeCache.txt" ]; then
+  cached_fuzz_source="$(sed -n 's/^CMAKE_HOME_DIRECTORY:INTERNAL=//p' "$bd/CMakeCache.txt" | head -1)"
+  cached_fuzz_compiler="$(sed -n "s/^${cc_var}:[^=]*=//p" "$bd/CMakeCache.txt" | head -1)"
+  resolved_fuzz_compiler="$(command -v "$CC" 2>/dev/null || printf '%s' "$CC")"
+  if { [ -n "$cached_fuzz_source" ] && [ "$cached_fuzz_source" != "$expected_fuzz_source" ]; } ||
+     { [ -n "$cached_fuzz_compiler" ] && [ "$cached_fuzz_compiler" != "$resolved_fuzz_compiler" ]; }; then
+    echo ">> removing stale fuzz cache"
+    rm -rf "$bd"
+  fi
+fi
+
 p101_preferred_build_dir="build-$(basename "$CC")"
 p101_path_args=()
 p101_join_paths() {

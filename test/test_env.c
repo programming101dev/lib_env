@@ -50,9 +50,9 @@ static void make_path(char path[], size_t path_size, const char *suffix)
 static void test_event_parser_contract(void)
 {
     struct p101_tool_event_record record;
-    char                         escaped[] = "P101CALL\t2\t42\t1\t100\t200\tENTER\t7\tfun\\tname\tcall\\\\name\targ\\ntext\t-\tfile\\tname.c\n";
-    char                         exec_fail[] = "P101EXECFAIL\t2\t42\t2\t101\t201\t9\tp101_execv\tfile.c\t/bin/missing\n";
-    char                         spawn[] = "P101SPAWN\t2\t42\t3\t102\t202\t43\t10\tp101_posix_spawn\tspawn.c\t/bin/true\n";
+    char                         escaped[] = "P101CALL\t4\t42\t1\t1\t100\t200\tENTER\t7\tfun\\tname\tcall\\\\name\targ\\ntext\t-\tfile\\tname.c\n";
+    char                         exec_fail[] = "P101EXECFAIL\t4\t42\t1\t2\t101\t201\t9\tp101_execv\tfile.c\t/bin/missing\n";
+    char                         spawn[] = "P101SPAWN\t4\t42\t1\t3\t102\t202\t43\t10\tp101_posix_spawn\tspawn.c\t/bin/true\n";
     char                         v1[]      = "P101FD\t1\t42\tOPEN\t3\t7\tmain\tfile.c\n";
 
     EXPECT(p101_tool_event_parse_line(escaped, &record) == P101_TOOL_EVENT_PARSE_OK);
@@ -105,6 +105,7 @@ static void test_long_record_round_trip(void)
     long_name[sizeof(long_name) - 1U] = '\0';
     p101_env_set_fd_log(env, stream);
     p101_env_track_open(env, 9, "file.c", long_name, 8);
+    p101_env_destroy(env);
     rewind(stream);
 
     EXPECT(p101_tool_event_read_line(err, stream, line, 4096U) == P101_TOOL_EVENT_LINE_OK);
@@ -113,7 +114,6 @@ static void test_long_record_round_trip(void)
 
     free(line);
     fclose(stream);
-    p101_env_destroy(env);
     p101_error_destroy(err);
 }
 
@@ -134,6 +134,7 @@ static void test_generic_resource_round_trip(void)
 
     p101_env_set_resource_log(env, stream);
     p101_env_track_resource(env, P101_TOOL_EVENT_RESOURCE_ACQUIRE, "mapping", "0x1000", NULL, 4096U, "private", "mapping.c", "map_file", 27);
+    p101_env_destroy(env);
     rewind(stream);
 
     EXPECT(p101_tool_event_read_line(err, stream, line, sizeof(line)) == P101_TOOL_EVENT_LINE_OK);
@@ -150,7 +151,6 @@ static void test_generic_resource_round_trip(void)
     EXPECT(record.line_number == 27);
 
     fclose(stream);
-    p101_env_destroy(env);
     p101_error_destroy(err);
 }
 
@@ -177,11 +177,51 @@ static void test_event_write_failure_is_sticky(void)
         EXPECT(p101_env_event_log_failed(env) == 0);
     }
 
+    p101_env_destroy(env);
     if(stream != NULL)
     {
         fclose(stream);
     }
+    p101_error_destroy(err);
+}
+
+static void traced_scope(const struct p101_env *env)
+{
+    P101_TRACE_SCOPE(env);
+}
+
+static void test_scope_trace_pairs_entry_and_exit(void)
+{
+    struct p101_tool_event_record record;
+    struct p101_error            *err;
+    struct p101_env              *env;
+    FILE                         *stream;
+    char                          line[2048];
+
+    err    = p101_error_create(false);
+    env    = p101_env_create(err, NULL);
+    stream = tmpfile();
+    EXPECT(err != NULL);
+    EXPECT(env != NULL);
+    EXPECT(stream != NULL);
+
+    p101_env_set_call_log(env, stream, P101_ENV_CALL_LOG_DEFAULT);
+    traced_scope(env);
     p101_env_destroy(env);
+    rewind(stream);
+
+    EXPECT(p101_tool_event_read_line(err, stream, line, sizeof(line)) == P101_TOOL_EVENT_LINE_OK);
+    EXPECT(p101_tool_event_parse_line(line, &record) == P101_TOOL_EVENT_PARSE_OK);
+    EXPECT(record.record_kind == P101_TOOL_EVENT_RECORD_CALL);
+    EXPECT(record.call_kind == P101_TOOL_EVENT_CALL_ENTER);
+    EXPECT(strcmp(record.call_name, "traced_scope") == 0);
+    EXPECT(p101_tool_event_read_line(err, stream, line, sizeof(line)) == P101_TOOL_EVENT_LINE_OK);
+    EXPECT(p101_tool_event_parse_line(line, &record) == P101_TOOL_EVENT_PARSE_OK);
+    EXPECT(record.record_kind == P101_TOOL_EVENT_RECORD_CALL);
+    EXPECT(record.call_kind == P101_TOOL_EVENT_CALL_EXIT);
+    EXPECT(strcmp(record.call_name, "traced_scope") == 0);
+
+    fclose(stream);
     p101_error_destroy(err);
 }
 
@@ -254,27 +294,36 @@ static void test_concurrent_event_sequences(void)
     }
 
     EXPECT(p101_env_event_log_failed(env) == 0);
+    p101_env_destroy(env);
+    env = NULL;
     rewind(stream);
     count = 0U;
     while(p101_tool_event_read_line(err, stream, line, sizeof(line)) == P101_TOOL_EVENT_LINE_OK)
     {
         EXPECT(p101_tool_event_parse_line(line, &record) == P101_TOOL_EVENT_PARSE_OK);
-        EXPECT(record.record_kind == P101_TOOL_EVENT_RECORD_RESOURCE);
-        EXPECT(record.sequence > 0U);
-        EXPECT(record.sequence <= (size_t)CONCURRENT_THREAD_COUNT * CONCURRENT_EVENTS_PER_THREAD);
-        if(record.sequence > 0U && record.sequence <= (size_t)CONCURRENT_THREAD_COUNT * CONCURRENT_EVENTS_PER_THREAD)
+        if(record.record_kind == P101_TOOL_EVENT_RECORD_RESOURCE)
         {
-            EXPECT(seen[record.sequence - 1U] == 0U);
-            seen[record.sequence - 1U] = 1U;
+            EXPECT(record.sequence > 0U);
+            EXPECT(record.sequence <= (size_t)CONCURRENT_THREAD_COUNT * CONCURRENT_EVENTS_PER_THREAD);
+            if(record.sequence > 0U && record.sequence <= (size_t)CONCURRENT_THREAD_COUNT * CONCURRENT_EVENTS_PER_THREAD)
+            {
+                EXPECT(seen[record.sequence - 1U] == 0U);
+                seen[record.sequence - 1U] = 1U;
+            }
+            count++;
         }
-        count++;
+        else
+        {
+            EXPECT(record.record_kind == P101_TOOL_EVENT_RECORD_COMPLETE);
+            EXPECT(record.events_attempted == (size_t)CONCURRENT_THREAD_COUNT * CONCURRENT_EVENTS_PER_THREAD);
+            EXPECT(record.write_failed == 0);
+        }
     }
     EXPECT(count == (size_t)CONCURRENT_THREAD_COUNT * CONCURRENT_EVENTS_PER_THREAD);
     EXPECT(p101_error_has_no_error(err));
 
     free(seen);
     fclose(stream);
-    p101_env_destroy(env);
     p101_error_destroy(err);
 }
 
@@ -341,7 +390,7 @@ static void test_dup_keeps_owned_destination(void)
     if(stream != NULL)
     {
         EXPECT(fgets(line, sizeof(line), stream) != NULL);
-        EXPECT(strncmp(line, "P101FD\t3\t", strlen("P101FD\t3\t")) == 0);
+        EXPECT(strncmp(line, "P101FD\t4\t", strlen("P101FD\t4\t")) == 0);
         fclose(stream);
     }
     remove(path);
@@ -374,10 +423,79 @@ static void test_observers_remain_independent(void)
     if(stream != NULL)
     {
         EXPECT(fgets(line, sizeof(line), stream) != NULL);
-        EXPECT(strncmp(line, "P101ALLOC\t3\t", strlen("P101ALLOC\t3\t")) == 0);
+        EXPECT(strncmp(line, "P101ALLOC\t4\t", strlen("P101ALLOC\t4\t")) == 0);
         fclose(stream);
     }
     remove(path);
+}
+
+static void test_distinct_manual_streams_receive_completion(void)
+{
+    struct p101_error *err;
+    struct p101_env   *env;
+    FILE              *alloc_stream;
+    FILE              *fd_stream;
+    int                allocation;
+    char               line[2048];
+    int                alloc_complete;
+    int                fd_complete;
+
+    err          = p101_error_create(false);
+    env          = p101_env_create(err, NULL);
+    alloc_stream = tmpfile();
+    fd_stream    = tmpfile();
+    EXPECT(err != NULL);
+    EXPECT(env != NULL);
+    EXPECT(alloc_stream != NULL);
+    EXPECT(fd_stream != NULL);
+    if(env == NULL || alloc_stream == NULL || fd_stream == NULL)
+    {
+        if(env != NULL)
+        {
+            p101_env_destroy(env);
+        }
+        if(alloc_stream != NULL)
+        {
+            fclose(alloc_stream);
+        }
+        if(fd_stream != NULL)
+        {
+            fclose(fd_stream);
+        }
+        p101_error_destroy(err);
+        return;
+    }
+
+    p101_env_set_alloc_log(env, alloc_stream);
+    p101_env_set_fd_log(env, fd_stream);
+    p101_env_track_alloc(env, &allocation, sizeof(allocation), "file.c", "allocate", 10);
+    p101_env_track_open(env, 41, "file.c", "open_file", 11);
+    p101_env_destroy(env);
+
+    alloc_complete = 0;
+    rewind(alloc_stream);
+    while(fgets(line, sizeof(line), alloc_stream) != NULL)
+    {
+        if(strncmp(line, "P101COMPLETE\t4\t", strlen("P101COMPLETE\t4\t")) == 0)
+        {
+            alloc_complete++;
+        }
+    }
+    fd_complete = 0;
+    rewind(fd_stream);
+    while(fgets(line, sizeof(line), fd_stream) != NULL)
+    {
+        if(strncmp(line, "P101COMPLETE\t4\t", strlen("P101COMPLETE\t4\t")) == 0)
+        {
+            fd_complete++;
+        }
+    }
+    EXPECT(alloc_complete == 1);
+    EXPECT(fd_complete == 1);
+
+    fclose(alloc_stream);
+    fclose(fd_stream);
+    p101_error_destroy(err);
 }
 
 static void test_dup_keeps_fault_configuration(void)
@@ -437,10 +555,12 @@ int main(void)
     test_long_record_round_trip();
     test_generic_resource_round_trip();
     test_event_write_failure_is_sticky();
+    test_scope_trace_pairs_entry_and_exit();
     test_concurrent_event_sequences();
     test_short_fault_action_repeats();
     test_dup_keeps_owned_destination();
     test_observers_remain_independent();
+    test_distinct_manual_streams_receive_completion();
     test_dup_keeps_fault_configuration();
 
     if(failures != 0)

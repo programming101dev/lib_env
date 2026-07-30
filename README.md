@@ -71,13 +71,14 @@ This compiles through the strict analysis pipeline: the clang-format check, clan
 ## **Testing**
 
 `./check.sh` is the one command to run before you submit: the format check, the strict build, the tests, and a short fuzz smoke run, with a single PASS/FAIL at the end.
-The event-library test tree covers v2 compatibility, v3 round trips, long records, reader
-errors, duplicated log destinations, and independent resource observers. The
+The event-library test tree covers current-format round trips, rejection of old
+formats, long records, reader errors, duplicated log destinations, and
+independent resource observers. The
 fuzz harness feeds arbitrary records through the shared event parser.
 
 ## **Tracing and structured call logs**
 
-`P101_TRACE(env)` logs function entry through the installed tracer. `P101_TRACE_EXIT(env)` logs function exit through the installed exit tracer. These remain the lightweight call-tree hooks.
+`P101_TRACE(env)` logs function entry through the installed tracer. `P101_TRACE_EXIT(env)` logs function exit through the installed exit tracer. For ordinary functions, `P101_TRACE_SCOPE(env)` is the safer default: it emits the entry immediately and arranges the matching exit for every normal scope departure, including early `return` statements. It relies on the GCC/Clang cleanup attribute and, like any scope cleanup, cannot run after `longjmp`, `_Exit`, `abort`, or process termination.
 
 For strace/ltrace-style tooling, `lib_env` also provides a structured call observer. Existing `P101_TRACE` / `P101_TRACE_EXIT` calls emit `P101CALL` enter/exit records with no parameter text. Functions that want parameter or return-value text can use:
 
@@ -158,7 +159,10 @@ record as one locked stream write. If any event or fault-log write fails,
 `p101_env_event_log_failed()` remains true until
 `p101_env_clear_event_log_error()` is called;
 `p101_env_event_log_errno()` returns the first recorded error. Destruction also
-prints a warning to `stderr`, so a partial instrumentation log cannot look
+prints a warning to `stderr` and writes a `P101COMPLETE` receipt to each
+built-in event stream. The receipt records whether any earlier event write
+failed; if destruction never runs, v3 consumers treat the missing receipt as
+incomplete evidence. A partial instrumentation log therefore cannot look
 silently complete. The environment's other mutable configuration remains
 caller-synchronized. One env per thread remains the general rule; the built-in
 event-log observers are the narrow exception and may emit concurrently after
