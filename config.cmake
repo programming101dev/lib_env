@@ -36,6 +36,7 @@ set(p101_env_SOURCES
 # Header files for installation
 set(p101_env_HEADERS
         include/p101_env/env.h
+        include/p101_env/wrapper.h
 )
 
 # Linked libraries required for this project

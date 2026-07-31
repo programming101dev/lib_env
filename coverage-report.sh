@@ -55,16 +55,19 @@ case "$main_bd" in build-*) _sfx="${main_bd#build-}" ;; *) _sfx="" ;; esac
 
 has_gcno() { [[ -d "$1" && "$(find "$1" -name '*.gcno' 2>/dev/null | wc -l | tr -d '[:space:]')" != "0" ]]; }
 
-# collect the dirs that actually hold coverage data: the main build plus any
-# test build tree (test/build or test/build-<cc>) created by ./test.sh --coverage
+# Use only the test tree paired with the active main build. Mixing every old
+# test/build-* directory can combine coverage compiled from different source
+# revisions and either inflate the result or make gcovr reject the merge.
+case "$main_bd" in
+  build-*) test_bd="test/build-${main_bd#build-}" ;;
+  *)       test_bd="test/build" ;;
+esac
 cov_dirs=()
-has_gcno "$main_bd" && cov_dirs+=("$main_bd")
-if [[ -d test ]]; then
-  shopt -s nullglob
-  for _tbd in test/build test/build-*; do
-    has_gcno "$_tbd" && cov_dirs+=("$_tbd")
-  done
-  shopt -u nullglob
+if [[ $report_only -eq 1 && -d test ]] && has_gcno "$test_bd"; then
+  cov_dirs+=("$test_bd")
+else
+  has_gcno "$main_bd" && cov_dirs+=("$main_bd")
+  [[ -d test ]] && has_gcno "$test_bd" && cov_dirs+=("$test_bd")
 fi
 if [[ ${#cov_dirs[@]} -eq 0 ]]; then
   echo "No .gcno found in '$main_bd' or test build — build with coverage first:" >&2
@@ -117,8 +120,9 @@ fi
 cov_out="coverage${_sfx:+-$_sfx}"
 rm -rf "$cov_out"; mkdir -p "$cov_out"
 echo ">> gcovr (gcov: $gcov_tool) over: ${cov_dirs[*]} -> $cov_out/"
-gcovr --gcov-executable "$gcov_tool" -r . "${cov_dirs[@]}" --decisions --html-details -o "$cov_out/index.html"
-gcovr --gcov-executable "$gcov_tool" -r . "${cov_dirs[@]}" --decisions > "$cov_out/summary.txt"
+gcovr_args=(--gcov-executable "$gcov_tool" -r . "${cov_dirs[@]}" --filter 'src/')
+gcovr "${gcovr_args[@]}" --decisions --html-details -o "$cov_out/index.html"
+gcovr "${gcovr_args[@]}" --decisions > "$cov_out/summary.txt"
 echo "---- summary ----"
 cat "$cov_out/summary.txt"
 
@@ -138,7 +142,7 @@ if [[ -n "$min_cov" || -n "$min_branch_cov" ]]; then
   [[ -n "$min_cov" ]] && gate_args+=(--fail-under-line "$min_cov")
   [[ -n "$min_branch_cov" ]] && gate_args+=(--fail-under-branch "$min_branch_cov")
   set +e
-  gate_out="$(gcovr --gcov-executable "$gcov_tool" -r . "${cov_dirs[@]}" --print-summary "${gate_args[@]}" 2>&1)"
+  gate_out="$(gcovr "${gcovr_args[@]}" --print-summary "${gate_args[@]}" 2>&1)"
   gate_rc=$?
   set -e
   measured="$(printf '%s\n' "$gate_out" | grep -iE '^lines:' | grep -oE '[0-9]+(\.[0-9]+)?' | head -1)"

@@ -49,6 +49,11 @@ ccbase="$(basename "$comp")"
 
 case "$main_bd" in build-*) sfx="${main_bd#build-}" ;; *) sfx="$ccbase" ;; esac
 test_bd="test/build-${sfx}"
+if [ "$coverage" -eq 1 ]; then
+  # Coverage must never retain objects for sources that were removed from the
+  # test target; CMake's incremental clean rules no longer know about them.
+  rm -rf "$test_bd"
+fi
 expected_test_source="$(CDPATH='' cd test && pwd)"
 if [ -f "$test_bd/CMakeCache.txt" ]; then
   cached_test_source="$(sed -n 's/^CMAKE_HOME_DIRECTORY:INTERNAL=//p' "$test_bd/CMakeCache.txt" | head -1)"
@@ -70,8 +75,11 @@ if [ -f "$test_bd/CMakeCache.txt" ]; then
 fi
 cov_arg="-DP101_TEST_COVERAGE=OFF"
 [ "$coverage" -eq 1 ] && cov_arg="-DP101_TEST_COVERAGE=ON"
-sanitizer_flags="$(sed -n 's/^DETECTED_SANITIZERS:STRING=//p' "$main_bd/CMakeCache.txt" | head -1)"
-sanitizer_flags="${sanitizer_flags//;/ }"
+sanitizer_flags=""
+if [ "$coverage" -eq 0 ]; then
+  sanitizer_flags="$(sed -n 's/^DETECTED_SANITIZERS:STRING=//p' "$main_bd/CMakeCache.txt" | head -1)"
+  sanitizer_flags="${sanitizer_flags//;/ }"
+fi
 compile_flag_arg="-DCMAKE_C_FLAGS=$sanitizer_flags"
 if [ "$lang" = "CXX" ] || [ "$lang" = "CPP" ]; then
   compile_flag_arg="-DCMAKE_CXX_FLAGS=$sanitizer_flags"
