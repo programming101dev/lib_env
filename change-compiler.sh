@@ -197,5 +197,8 @@ cmake "${cmake_args[@]}"
 
 # Only publish a build directory after CMake configured it successfully.
 printf '%s\n' "$build_dir" > .last-build-dir
+if [[ "${P101_COVERAGE:-0}" != "1" && "${P101_PROFILE:-0}" != "1" ]]; then
+  printf '%s\n' "$build_dir" > .last-runtime-build-dir
+fi
 
 echo "Done. Now run:  ./build.sh"

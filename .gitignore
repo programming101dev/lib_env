@@ -186,6 +186,7 @@ build/
 build-*/
 
 .last-build-dir
+.last-runtime-build-dir
 ### Programming 101 transient (build/test/fuzz/debug output) ###
 test/build/
 test/build-*/
