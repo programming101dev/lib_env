@@ -1,6 +1,14 @@
 # lib_env is below lib_c and lib_posix in the dependency graph. These exact
 # file boundaries avoid an upward dependency cycle.
 src/env.c:*:clock_gettime
+src/env.c:*:atomic_flag_clear
+src/env.c:*:atomic_flag_clear_explicit
+src/env.c:*:atomic_flag_test_and_set_explicit
+src/env.c:*:atomic_compare_exchange_strong_explicit
+src/env.c:*:atomic_exchange_explicit
+src/env.c:*:atomic_fetch_add_explicit
+src/env.c:*:atomic_load_explicit
+src/env.c:*:atomic_store_explicit
 src/env.c:*:fclose
 src/env.c:*:fcntl
 src/env.c:*:fflush
