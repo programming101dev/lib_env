@@ -47,6 +47,49 @@ fi
 [ -n "$comp" ] || { echo "Could not read the compiler from $main_bd/CMakeCache.txt." >&2; exit 1; }
 ccbase="$(basename "$comp")"
 
+p101_companion_compiler() {
+  local compiler_dir compiler_name candidate_name candidate
+
+  compiler_dir="$(dirname "$1")"
+  compiler_name="$(basename "$1")"
+  case "$compiler_name" in
+    clang++) candidate_name="clang" ;;
+    clang++-*) candidate_name="clang-${compiler_name#clang++-}" ;;
+    clang) candidate_name="clang++" ;;
+    clang-*) candidate_name="clang++-${compiler_name#clang-}" ;;
+    g++) candidate_name="gcc" ;;
+    g++-*) candidate_name="gcc-${compiler_name#g++-}" ;;
+    gcc) candidate_name="g++" ;;
+    gcc-*) candidate_name="g++-${compiler_name#gcc-}" ;;
+    c++) candidate_name="cc" ;;
+    cc) candidate_name="c++" ;;
+    *) return 1 ;;
+  esac
+  candidate="$compiler_dir/$candidate_name"
+  if [ -x "$candidate" ]; then
+    printf '%s' "$candidate"
+    return 0
+  fi
+  command -v "$candidate_name" 2>/dev/null
+}
+
+# Most library test trees deliberately compile both their C API and a C++
+# header-compatibility target. Pair clang with clang++ (or gcc with g++) so
+# sanitizer flags probed for one compiler are never handed to an unrelated
+# default compiler selected by CMake.
+companion_args=()
+companion_comp=""
+test_project_line="$(sed -n '/^[[:space:]]*project[[:space:]]*(/p' test/CMakeLists.txt | head -1)"
+if companion_comp="$(p101_companion_compiler "$comp")"; then
+  if [ "$lang" = "CXX" ] || [ "$lang" = "CPP" ]; then
+    if printf '%s\n' "$test_project_line" | grep -Eq '(^|[[:space:](])C([[:space:])]|$)'; then
+      companion_args+=("-DCMAKE_C_COMPILER=$companion_comp")
+    fi
+  elif printf '%s\n' "$test_project_line" | grep -Eq '(^|[[:space:](])CXX([[:space:])]|$)'; then
+    companion_args+=("-DCMAKE_CXX_COMPILER=$companion_comp")
+  fi
+fi
+
 case "$main_bd" in build-*) sfx="${main_bd#build-}" ;; *) sfx="$ccbase" ;; esac
 test_bd="test/build-${sfx}"
 if [ "$coverage" -eq 1 ]; then
@@ -70,6 +113,17 @@ if [ -f "$test_bd/CMakeCache.txt" ]; then
   fi
   if [ -n "$cached_test_compiler" ] && [ "$cached_test_compiler" != "$comp" ]; then
     echo ">> removing test cache configured for $cached_test_compiler"
+    rm -rf "$test_bd"
+  fi
+fi
+if [ -f "$test_bd/CMakeCache.txt" ] && [ "${#companion_args[@]}" -ne 0 ]; then
+  if [ "$lang" = "CXX" ] || [ "$lang" = "CPP" ]; then
+    cached_companion_compiler="$(sed -n 's/^CMAKE_C_COMPILER:[^=]*=//p' "$test_bd/CMakeCache.txt" | head -1)"
+  else
+    cached_companion_compiler="$(sed -n 's/^CMAKE_CXX_COMPILER:[^=]*=//p' "$test_bd/CMakeCache.txt" | head -1)"
+  fi
+  if [ -n "$cached_companion_compiler" ] && [ "$cached_companion_compiler" != "$companion_comp" ]; then
+    echo ">> removing test cache configured for companion $cached_companion_compiler"
     rm -rf "$test_bd"
   fi
 fi
@@ -134,7 +188,10 @@ if p101_workspace_root="$(p101_find_workspace_root)"; then
 fi
 
 echo ">> configuring test tree ($test_bd) with $ccbase"
-cmake -S test -B "$test_bd" "$compflag" "$compile_flag_arg" ${sanitizer_args[@]+"${sanitizer_args[@]}"} ${p101_path_args[@]+"${p101_path_args[@]}"} "$cov_arg" >/dev/null
+cmake -S test -B "$test_bd" "$compflag" ${companion_args[@]+"${companion_args[@]}"} \
+  -DCMAKE_POSITION_INDEPENDENT_CODE=ON "$compile_flag_arg" \
+  ${sanitizer_args[@]+"${sanitizer_args[@]}"} \
+  ${p101_path_args[@]+"${p101_path_args[@]}"} "$cov_arg" >/dev/null
 if [ "$coverage" -eq 1 ]; then
   # A source edit can change gcov's counter layout without changing the .gcda
   # filename. Never merge a new test run into stale runtime data.
