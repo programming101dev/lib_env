@@ -166,16 +166,17 @@ bin="$bd/fuzz"
 mkdir -p fuzz/corpus fuzz/findings fuzz/artifacts
 
 
+p101_dyld_insert="${DYLD_INSERT_LIBRARIES:-}"
 if [ "$(uname -s)" = "Darwin" ]; then
   asan_runtime="$($CC -print-file-name=libclang_rt.asan_osx_dynamic.dylib 2>/dev/null || true)"
   if [ -f "$asan_runtime" ]; then
-    case ":${DYLD_INSERT_LIBRARIES:-}:" in
+    case ":$p101_dyld_insert:" in
       *:"$asan_runtime":*) ;;
       *)
-        if [ -n "${DYLD_INSERT_LIBRARIES:-}" ]; then
-          export DYLD_INSERT_LIBRARIES="$asan_runtime:$DYLD_INSERT_LIBRARIES"
+        if [ -n "$p101_dyld_insert" ]; then
+          p101_dyld_insert="$asan_runtime:$p101_dyld_insert"
         else
-          export DYLD_INSERT_LIBRARIES="$asan_runtime"
+          p101_dyld_insert="$asan_runtime"
         fi
         ;;
     esac
@@ -190,8 +191,14 @@ start_marker="$bd/.last-run-start"
 # fuzz/findings (transient) so the committed seed corpus (fuzz/corpus) stays clean.
 echo ">> running: $bin fuzz/findings fuzz/corpus -max_total_time=$secs (findings -> fuzz/findings/, crashes -> fuzz/artifacts/)"
 rc=0
-"$bin" fuzz/findings fuzz/corpus -max_total_time="$secs" -print_final_stats=1 \
-       -artifact_prefix=fuzz/artifacts/ ${extra[@]+"${extra[@]}"} || rc=$?
+if [ -n "$p101_dyld_insert" ]; then
+  DYLD_INSERT_LIBRARIES="$p101_dyld_insert" \
+    "$bin" fuzz/findings fuzz/corpus -max_total_time="$secs" -print_final_stats=1 \
+      -artifact_prefix=fuzz/artifacts/ ${extra[@]+"${extra[@]}"} || rc=$?
+else
+  "$bin" fuzz/findings fuzz/corpus -max_total_time="$secs" -print_final_stats=1 \
+    -artifact_prefix=fuzz/artifacts/ ${extra[@]+"${extra[@]}"} || rc=$?
+fi
 
 newart="$(find fuzz/artifacts -type f -newer "$start_marker" 2>/dev/null | head -1)"
 rm -f "$start_marker"
