@@ -134,7 +134,7 @@ static void test_generic_resource_round_trip(void)
     EXPECT(stream != NULL);
 
     p101_env_set_resource_log(env, stream);
-    p101_env_track_resource(env, P101_TOOL_EVENT_RESOURCE_ACQUIRE, "mapping", "0x1000", NULL, 4096U, "private", "mapping.c", "map_file", 27);
+    p101_env_track_resource(env, P101_ENV_RESOURCE_ACQUIRE, "mapping", "0x1000", NULL, 4096U, "private", "mapping.c", "map_file", 27);
     p101_env_destroy(env);
     rewind(stream);
 
@@ -171,7 +171,7 @@ static void test_event_write_failure_is_sticky(void)
     if(env != NULL && stream != NULL)
     {
         p101_env_set_resource_log(env, stream);
-        p101_env_track_resource(env, P101_TOOL_EVENT_RESOURCE_ACQUIRE, "test", "write-failure", NULL, 0U, NULL, __FILE__, __func__, __LINE__);
+        p101_env_track_resource(env, P101_ENV_RESOURCE_ACQUIRE, "test", "write-failure", NULL, 0U, NULL, __FILE__, __func__, __LINE__);
         EXPECT(p101_env_event_log_failed(env) != 0);
         EXPECT(p101_env_event_log_errno(env) != 0);
         p101_env_clear_event_log_error(env);
@@ -236,7 +236,7 @@ static void *write_concurrent_events(void *data)
     for(event_number = 0U; event_number < CONCURRENT_EVENTS_PER_THREAD; event_number++)
     {
         snprintf(resource_id, sizeof(resource_id), "%zu:%zu", writer->thread_number, event_number);
-        p101_env_track_resource(writer->env, P101_TOOL_EVENT_RESOURCE_ACQUIRE, "concurrency-test", resource_id, NULL, 0U, NULL, __FILE__, __func__, __LINE__);
+        p101_env_track_resource(writer->env, P101_ENV_RESOURCE_ACQUIRE, "concurrency-test", resource_id, NULL, 0U, NULL, __FILE__, __func__, __LINE__);
     }
 
     return NULL;

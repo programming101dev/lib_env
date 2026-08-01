@@ -19,6 +19,7 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <p101_tool_event/event.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -113,47 +114,48 @@ enum
     P101_DEFAULT_FAULT_ERRNO     = EIO
 };
 
-static void                         p101_env_init(struct p101_env *env, p101_env_tracer tracer);
-static void                         p101_env_init_event_state(struct p101_env *env, struct p101_error *err);
-static void                         p101_env_configure_from_environment(struct p101_env *env, struct p101_error *err);
-static void                         p101_env_configure_fault_from_environment(struct p101_env *env, struct p101_error *err);
-static void                         p101_env_configure_fd_log_from_environment(struct p101_env *env, struct p101_error *err);
-static void                         p101_env_configure_call_log_from_environment(struct p101_env *env, struct p101_error *err);
-static void                         p101_env_configure_resource_log_path(struct p101_env *env, struct p101_error *err, const char *path, int enable_fd, int enable_alloc, int enable_resource);
-static void                         p101_env_configure_call_log_path(struct p101_env *env, struct p101_error *err, const char *path, unsigned options);
-static FILE                        *p101_env_open_log_from_environment(struct p101_error *err, const char *path, int *owned);
-static char                        *p101_env_copy_text(struct p101_error *err, const char *text);
-static void                         p101_env_close_owned_resource_log(struct p101_env *env);
-static void                         p101_env_close_owned_resource_log_if_unused(struct p101_env *env);
-static void                         p101_env_close_owned_call_log(struct p101_env *env);
-static struct p101_env_fault_state *p101_env_fault_state_dup(struct p101_error *err, const struct p101_env_fault_state *source);
-static void                         p101_env_fault_state_destroy(struct p101_env_fault_state *state);
-static void                         p101_env_log_fault_hit(const struct p101_env *env, const struct p101_env_fault_state *state, const char *call_name);
-static int                          p101_env_environment_fault_injector(const struct p101_env *env, const char *call_name, void *user_data);
-static int                          p101_env_environment_fault_action(const struct p101_env *env, const char *call_name, void *user_data, struct p101_env_fault_action *action);
-static unsigned long                p101_env_parse_unsigned_environment(const char *text, unsigned long default_value, int *ok);
-static int                          p101_env_parse_int_environment(const char *text, int default_value, int *ok);
-static int                          p101_env_flag_on(const char *name, int default_value);
-static unsigned long long           p101_env_next_event_sequence(const struct p101_env *env);
-static void                         p101_env_lock_event_emission(const struct p101_env *env);
-static void                         p101_env_unlock_event_emission(const struct p101_env *env);
-static void                         p101_env_prepare_event_record(const struct p101_env *env, struct p101_tool_event_output *record, p101_tool_event_record_kind kind, long pid);
-static void                         p101_env_record_event_write_failure(const struct p101_env *env);
-static void                         p101_env_write_event(const struct p101_env *env, FILE *stream, const struct p101_tool_event_output *record, size_t stream_kind);
-static size_t                       p101_env_stream_attempts(const struct p101_env *env, size_t stream_kind, long pid);
-static void                         p101_env_write_completion_record(const struct p101_env *env, FILE *stream, size_t events_attempted);
-static void                         p101_env_fd_notify(const struct p101_env *env, p101_env_fd_event event, int fd, const char *file_name, const char *function_name, int line_number);
-static void                         p101_env_fd_log_observer(const struct p101_env *env, p101_env_fd_event event, int fd, const char *file_name, const char *function_name, int line_number, void *user_data);
-static void                         p101_env_fork_log(const struct p101_env *env, FILE *stream, long parent_pid, long child_pid, const char *file_name, const char *function_name, int line_number, size_t stream_kind);
-static void                         p101_env_spawn_log(const struct p101_env *env, FILE *stream, long parent_pid, long child_pid, const char *target, const char *file_name, const char *function_name, int line_number);
-static long                         p101_env_exec_scan_limit(void);
-static void                         p101_env_exec_fd_log(const struct p101_env *env, FILE *stream, int fd, int cloexec, const char *target, const char *file_name, const char *function_name, int line_number);
-static void                         p101_env_exec_failure_log(const struct p101_env *env, FILE *stream, const char *target, const char *file_name, const char *function_name, int line_number);
-static void                         p101_env_alloc_notify(const struct p101_env *env, p101_env_alloc_event event, const void *ptr, const void *new_ptr, size_t size, const char *file_name, const char *function_name, int line_number);
-static void                         p101_env_alloc_log_observer(const struct p101_env *env, p101_env_alloc_event event, const void *ptr, const void *new_ptr, size_t size, const char *file_name, const char *function_name, int line_number, void *user_data);
-static void p101_env_resource_log_observer(const struct p101_env *env, p101_tool_event_resource_kind event, const char *resource_class, const char *resource_id, const char *related_id, size_t size, const char *metadata, const char *file_name,
-                                           const char *function_name, int line_number, void *user_data);
-static void p101_env_call_notify(const struct p101_env *env, p101_env_call_event event, const char *call_name, const char *arguments, const char *result, const char *file_name, const char *function_name, int line_number);
+static void                          p101_env_init(struct p101_env *env, p101_env_tracer tracer);
+static void                          p101_env_init_event_state(struct p101_env *env, struct p101_error *err);
+static void                          p101_env_configure_from_environment(struct p101_env *env, struct p101_error *err);
+static void                          p101_env_configure_fault_from_environment(struct p101_env *env, struct p101_error *err);
+static void                          p101_env_configure_fd_log_from_environment(struct p101_env *env, struct p101_error *err);
+static void                          p101_env_configure_call_log_from_environment(struct p101_env *env, struct p101_error *err);
+static void                          p101_env_configure_resource_log_path(struct p101_env *env, struct p101_error *err, const char *path, int enable_fd, int enable_alloc, int enable_resource);
+static void                          p101_env_configure_call_log_path(struct p101_env *env, struct p101_error *err, const char *path, unsigned options);
+static FILE                         *p101_env_open_log_from_environment(struct p101_error *err, const char *path, int *owned);
+static char                         *p101_env_copy_text(struct p101_error *err, const char *text);
+static void                          p101_env_close_owned_resource_log(struct p101_env *env);
+static void                          p101_env_close_owned_resource_log_if_unused(struct p101_env *env);
+static void                          p101_env_close_owned_call_log(struct p101_env *env);
+static struct p101_env_fault_state  *p101_env_fault_state_dup(struct p101_error *err, const struct p101_env_fault_state *source);
+static void                          p101_env_fault_state_destroy(struct p101_env_fault_state *state);
+static void                          p101_env_log_fault_hit(const struct p101_env *env, const struct p101_env_fault_state *state, const char *call_name);
+static int                           p101_env_environment_fault_injector(const struct p101_env *env, const char *call_name, void *user_data);
+static int                           p101_env_environment_fault_action(const struct p101_env *env, const char *call_name, void *user_data, struct p101_env_fault_action *action);
+static unsigned long                 p101_env_parse_unsigned_environment(const char *text, unsigned long default_value, int *ok);
+static int                           p101_env_parse_int_environment(const char *text, int default_value, int *ok);
+static int                           p101_env_flag_on(const char *name, int default_value);
+static unsigned long long            p101_env_next_event_sequence(const struct p101_env *env);
+static void                          p101_env_lock_event_emission(const struct p101_env *env);
+static void                          p101_env_unlock_event_emission(const struct p101_env *env);
+static void                          p101_env_prepare_event_record(const struct p101_env *env, struct p101_tool_event_output *record, p101_tool_event_record_kind kind, long pid);
+static void                          p101_env_record_event_write_failure(const struct p101_env *env);
+static void                          p101_env_write_event(const struct p101_env *env, FILE *stream, const struct p101_tool_event_output *record, size_t stream_kind);
+static size_t                        p101_env_stream_attempts(const struct p101_env *env, size_t stream_kind, long pid);
+static void                          p101_env_write_completion_record(const struct p101_env *env, FILE *stream, size_t events_attempted);
+static void                          p101_env_fd_notify(const struct p101_env *env, p101_env_fd_event event, int fd, const char *file_name, const char *function_name, int line_number);
+static void                          p101_env_fd_log_observer(const struct p101_env *env, p101_env_fd_event event, int fd, const char *file_name, const char *function_name, int line_number, void *user_data);
+static void                          p101_env_fork_log(const struct p101_env *env, FILE *stream, long parent_pid, long child_pid, const char *file_name, const char *function_name, int line_number, size_t stream_kind);
+static void                          p101_env_spawn_log(const struct p101_env *env, FILE *stream, long parent_pid, long child_pid, const char *target, const char *file_name, const char *function_name, int line_number);
+static long                          p101_env_exec_scan_limit(void);
+static void                          p101_env_exec_fd_log(const struct p101_env *env, FILE *stream, int fd, int cloexec, const char *target, const char *file_name, const char *function_name, int line_number);
+static void                          p101_env_exec_failure_log(const struct p101_env *env, FILE *stream, const char *target, const char *file_name, const char *function_name, int line_number);
+static void                          p101_env_alloc_notify(const struct p101_env *env, p101_env_alloc_event event, const void *ptr, const void *new_ptr, size_t size, const char *file_name, const char *function_name, int line_number);
+static void                          p101_env_alloc_log_observer(const struct p101_env *env, p101_env_alloc_event event, const void *ptr, const void *new_ptr, size_t size, const char *file_name, const char *function_name, int line_number, void *user_data);
+static p101_tool_event_resource_kind p101_env_event_resource_kind(p101_env_resource_kind event);
+static void                          p101_env_resource_log_observer(const struct p101_env *env, p101_env_resource_kind event, const char *resource_class, const char *resource_id, const char *related_id, size_t size, const char *metadata, const char *file_name,
+                                                                    const char *function_name, int line_number, void *user_data);
+static void                          p101_env_call_notify(const struct p101_env *env, p101_env_call_event event, const char *call_name, const char *arguments, const char *result, const char *file_name, const char *function_name, int line_number);
 static void p101_env_call_log_observer(const struct p101_env *env, p101_env_call_event event, const char *call_name, const char *arguments, const char *result, const char *file_name, const char *function_name, int line_number, void *user_data);
 
 static atomic_ullong p101_env_next_context_id = 0;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
@@ -1859,7 +1861,31 @@ static void p101_env_alloc_log_observer(const struct p101_env *env, p101_env_all
     p101_env_write_event(env, stream, &record, 1U);
 }
 
-static void p101_env_resource_log_observer(const struct p101_env *env, p101_tool_event_resource_kind event, const char *resource_class, const char *resource_id, const char *related_id, size_t size, const char *metadata, const char *file_name,
+static p101_tool_event_resource_kind p101_env_event_resource_kind(p101_env_resource_kind event)
+{
+#ifdef __clang__
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wcovered-switch-default"
+#endif
+    switch(event)
+    {
+        case P101_ENV_RESOURCE_ACQUIRE:
+            return P101_TOOL_EVENT_RESOURCE_ACQUIRE;
+        case P101_ENV_RESOURCE_RELEASE:
+            return P101_TOOL_EVENT_RESOURCE_RELEASE;
+        case P101_ENV_RESOURCE_REPLACE:
+            return P101_TOOL_EVENT_RESOURCE_REPLACE;
+        case P101_ENV_RESOURCE_TRANSFER:
+            return P101_TOOL_EVENT_RESOURCE_TRANSFER;
+        default:
+            return P101_TOOL_EVENT_RESOURCE_ACQUIRE;
+    }
+#ifdef __clang__
+    #pragma clang diagnostic pop
+#endif
+}
+
+static void p101_env_resource_log_observer(const struct p101_env *env, p101_env_resource_kind event, const char *resource_class, const char *resource_id, const char *related_id, size_t size, const char *metadata, const char *file_name,
                                            const char *function_name, int line_number, void *user_data)
 {
     struct p101_tool_event_output record;
@@ -1872,7 +1898,7 @@ static void p101_env_resource_log_observer(const struct p101_env *env, p101_tool
     }
 
     p101_env_prepare_event_record(env, &record, P101_TOOL_EVENT_RECORD_RESOURCE, (long)getpid());
-    record.resource_kind  = event;
+    record.resource_kind  = p101_env_event_resource_kind(event);
     record.resource_class = resource_class;
     record.resource_id    = resource_id;
     record.related_id     = related_id;
@@ -1980,7 +2006,7 @@ void p101_env_track_realloc(const struct p101_env *env, const void *ptr, const v
     p101_env_alloc_notify(env, P101_ENV_ALLOC_REALLOC, ptr, new_ptr, size, file_name, function_name, line_number);
 }
 
-void p101_env_track_resource(const struct p101_env *env, p101_tool_event_resource_kind event, const char *resource_class, const char *resource_id, const char *related_id, size_t size, const char *metadata, const char *file_name, const char *function_name,
+void p101_env_track_resource(const struct p101_env *env, p101_env_resource_kind event, const char *resource_class, const char *resource_id, const char *related_id, size_t size, const char *metadata, const char *file_name, const char *function_name,
                              int line_number)
 {
     if(env == NULL || env->resource_observer == NULL || resource_class == NULL || resource_class[0] == '\0' || resource_id == NULL || resource_id[0] == '\0')
@@ -2001,8 +2027,8 @@ void p101_env_pointer_resource_id(char *text, size_t text_size, const void *reso
     snprintf(text, P101_ENV_POINTER_RESOURCE_ID_SIZE, "%p", resource);    // NOLINT(cert-err33-c)
 }
 
-void p101_env_track_pointer_resource(const struct p101_env *env, p101_tool_event_resource_kind event, const char *resource_class, const void *resource, const void *related_resource, size_t size, const char *metadata, const char *file_name,
-                                     const char *function_name, int line_number)
+void p101_env_track_pointer_resource(const struct p101_env *env, p101_env_resource_kind event, const char *resource_class, const void *resource, const void *related_resource, size_t size, const char *metadata, const char *file_name, const char *function_name,
+                                     int line_number)
 {
     char        resource_id[P101_POINTER_BUF_LEN];
     char        related_id[P101_POINTER_BUF_LEN];
@@ -2023,7 +2049,7 @@ void p101_env_track_pointer_resource(const struct p101_env *env, p101_tool_event
     p101_env_track_resource(env, event, resource_class, resource_id, related_text, size, metadata, file_name, function_name, line_number);
 }
 
-void p101_env_track_integer_resource(const struct p101_env *env, p101_tool_event_resource_kind event, const char *resource_class, intmax_t resource, intmax_t related_resource, size_t size, const char *metadata, const char *file_name, const char *function_name,
+void p101_env_track_integer_resource(const struct p101_env *env, p101_env_resource_kind event, const char *resource_class, intmax_t resource, intmax_t related_resource, size_t size, const char *metadata, const char *file_name, const char *function_name,
                                      int line_number)
 {
     char        resource_id[P101_POINTER_BUF_LEN];
@@ -2032,7 +2058,7 @@ void p101_env_track_integer_resource(const struct p101_env *env, p101_tool_event
 
     snprintf(resource_id, sizeof(resource_id), "%" PRIdMAX, resource);    // NOLINT(cert-err33-c)
     related_text = NULL;
-    if(event == P101_TOOL_EVENT_RESOURCE_REPLACE || event == P101_TOOL_EVENT_RESOURCE_TRANSFER)
+    if(event == P101_ENV_RESOURCE_REPLACE || event == P101_ENV_RESOURCE_TRANSFER)
     {
         snprintf(related_id, sizeof(related_id), "%" PRIdMAX, related_resource);    // NOLINT(cert-err33-c)
         related_text = related_id;

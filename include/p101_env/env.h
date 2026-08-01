@@ -27,7 +27,6 @@
  */
 
 #include <p101_error/error.h>
-#include <p101_tool_event/event.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -243,18 +242,18 @@ extern "C"
      * The convenience sink built on that observer: one line per event, in the
      * format the resource-tracker analyzer reads.
      *
-     *     P101FD<TAB>3<TAB>pid<TAB>context<TAB>seq<TAB>mono_ns<TAB>wall_ns<TAB>OPEN|CLOSE<TAB>fd<TAB>line<TAB>function<TAB>file
-     *     P101FORK<TAB>3<TAB>parent-pid<TAB>context<TAB>seq<TAB>mono_ns<TAB>wall_ns<TAB>child-pid<TAB>line<TAB>function<TAB>file
-     *     P101SPAWN<TAB>3<TAB>parent-pid<TAB>context<TAB>seq<TAB>mono_ns<TAB>wall_ns<TAB>child-pid<TAB>line<TAB>function<TAB>file<TAB>target
-     *     P101EXEC<TAB>3<TAB>pid<TAB>context<TAB>seq<TAB>mono_ns<TAB>wall_ns<TAB>fd<TAB>cloexec<TAB>line<TAB>function<TAB>file<TAB>target
-     *     P101EXECFAIL<TAB>3<TAB>pid<TAB>context<TAB>seq<TAB>mono_ns<TAB>wall_ns<TAB>line<TAB>function<TAB>file<TAB>target
+     *     P101FD<TAB>4<TAB>pid<TAB>context<TAB>seq<TAB>mono_ns<TAB>wall_ns<TAB>OPEN|CLOSE<TAB>fd<TAB>line<TAB>function<TAB>file
+     *     P101FORK<TAB>4<TAB>parent-pid<TAB>context<TAB>seq<TAB>mono_ns<TAB>wall_ns<TAB>child-pid<TAB>line<TAB>function<TAB>file
+     *     P101SPAWN<TAB>4<TAB>parent-pid<TAB>context<TAB>seq<TAB>mono_ns<TAB>wall_ns<TAB>child-pid<TAB>line<TAB>function<TAB>file<TAB>target
+     *     P101EXEC<TAB>4<TAB>pid<TAB>context<TAB>seq<TAB>mono_ns<TAB>wall_ns<TAB>fd<TAB>cloexec<TAB>line<TAB>function<TAB>file<TAB>target
+     *     P101EXECFAIL<TAB>4<TAB>pid<TAB>context<TAB>seq<TAB>mono_ns<TAB>wall_ns<TAB>line<TAB>function<TAB>file<TAB>target
      *
      * The P101 record prefixes let the log share a stream with ordinary output
-     * and still be grepped back out; 3 is the emitted format version.
+     * and still be grepped back out; 4 is the emitted format version.
      * Free-form fields are escaped so embedded tabs and newlines cannot change
      * the record shape.
-     * Each record is written and flushed before returning, so the log survives
-     * a crash -- and because the pid is
+     * Each bounded record is published under the environment's emission lock.
+     * The stream is not synchronously flushed after every record. Because the pid is
      * on every line, the analyzer can tell the child's descriptors from the
      * parent's. The fork record lets an analyzer seed the child's descriptor
      * table from the descriptors live in the parent at fork time. A spawn
@@ -300,18 +299,26 @@ extern "C"
      * mapped address). The observer is deliberately generic so new wrappers do
      * not require another event schema.
      */
-    typedef void (*p101_env_resource_observer)(const struct p101_env *env, p101_tool_event_resource_kind event, const char *resource_class, const char *resource_id, const char *related_id, size_t size, const char *metadata, const char *file_name,
+    typedef enum
+    {
+        P101_ENV_RESOURCE_ACQUIRE = 0,
+        P101_ENV_RESOURCE_RELEASE,
+        P101_ENV_RESOURCE_REPLACE,
+        P101_ENV_RESOURCE_TRANSFER
+    } p101_env_resource_kind;
+
+    typedef void (*p101_env_resource_observer)(const struct p101_env *env, p101_env_resource_kind event, const char *resource_class, const char *resource_id, const char *related_id, size_t size, const char *metadata, const char *file_name,
                                                const char *function_name, int line_number, void *user_data);
 
     void p101_env_set_resource_observer(struct p101_env *env, p101_env_resource_observer observer, void *user_data);
     void p101_env_set_resource_log(struct p101_env *env, FILE *stream);
-    void p101_env_track_resource(const struct p101_env *env, p101_tool_event_resource_kind event, const char *resource_class, const char *resource_id, const char *related_id, size_t size, const char *metadata, const char *file_name, const char *function_name,
+    void p101_env_track_resource(const struct p101_env *env, p101_env_resource_kind event, const char *resource_class, const char *resource_id, const char *related_id, size_t size, const char *metadata, const char *file_name, const char *function_name,
                                  int line_number);
     void p101_env_pointer_resource_id(char *text, size_t text_size, const void *resource);
-    void p101_env_track_pointer_resource(const struct p101_env *env, p101_tool_event_resource_kind event, const char *resource_class, const void *resource, const void *related_resource, size_t size, const char *metadata, const char *file_name,
+    void p101_env_track_pointer_resource(const struct p101_env *env, p101_env_resource_kind event, const char *resource_class, const void *resource, const void *related_resource, size_t size, const char *metadata, const char *file_name,
                                          const char *function_name, int line_number);
-    void p101_env_track_integer_resource(const struct p101_env *env, p101_tool_event_resource_kind event, const char *resource_class, intmax_t resource, intmax_t related_resource, size_t size, const char *metadata, const char *file_name,
-                                         const char *function_name, int line_number);
+    void p101_env_track_integer_resource(const struct p101_env *env, p101_env_resource_kind event, const char *resource_class, intmax_t resource, intmax_t related_resource, size_t size, const char *metadata, const char *file_name, const char *function_name,
+                                         int line_number);
 
 #define P101_TRACE(env) p101_env_trace((env), __FILE__, __func__, __LINE__)
 #define P101_TRACE_EXIT(env) p101_env_trace_exit((env), __FILE__, __func__, __LINE__)
@@ -333,23 +340,23 @@ extern "C"
 #define P101_TRACK_ALLOC(env, ptr, size) p101_env_track_alloc((env), (ptr), (size), __FILE__, __func__, __LINE__)
 #define P101_TRACK_FREE(env, ptr) p101_env_track_free((env), (ptr), __FILE__, __func__, __LINE__)
 #define P101_TRACK_REALLOC(env, ptr, new_ptr, size) p101_env_track_realloc((env), (ptr), (new_ptr), (size), __FILE__, __func__, __LINE__)
-#define P101_TRACK_RESOURCE_ACQUIRE(env, resource_class, resource_id, size, metadata) p101_env_track_resource((env), P101_TOOL_EVENT_RESOURCE_ACQUIRE, (resource_class), (resource_id), NULL, (size), (metadata), __FILE__, __func__, __LINE__)
-#define P101_TRACK_RESOURCE_RELEASE(env, resource_class, resource_id, metadata) p101_env_track_resource((env), P101_TOOL_EVENT_RESOURCE_RELEASE, (resource_class), (resource_id), NULL, 0U, (metadata), __FILE__, __func__, __LINE__)
-#define P101_TRACK_RESOURCE_REPLACE(env, resource_class, resource_id, related_id, size, metadata) p101_env_track_resource((env), P101_TOOL_EVENT_RESOURCE_REPLACE, (resource_class), (resource_id), (related_id), (size), (metadata), __FILE__, __func__, __LINE__)
-#define P101_TRACK_RESOURCE_TRANSFER(env, resource_class, resource_id, related_id, metadata) p101_env_track_resource((env), P101_TOOL_EVENT_RESOURCE_TRANSFER, (resource_class), (resource_id), (related_id), 0U, (metadata), __FILE__, __func__, __LINE__)
+#define P101_TRACK_RESOURCE_ACQUIRE(env, resource_class, resource_id, size, metadata) p101_env_track_resource((env), P101_ENV_RESOURCE_ACQUIRE, (resource_class), (resource_id), NULL, (size), (metadata), __FILE__, __func__, __LINE__)
+#define P101_TRACK_RESOURCE_RELEASE(env, resource_class, resource_id, metadata) p101_env_track_resource((env), P101_ENV_RESOURCE_RELEASE, (resource_class), (resource_id), NULL, 0U, (metadata), __FILE__, __func__, __LINE__)
+#define P101_TRACK_RESOURCE_REPLACE(env, resource_class, resource_id, related_id, size, metadata) p101_env_track_resource((env), P101_ENV_RESOURCE_REPLACE, (resource_class), (resource_id), (related_id), (size), (metadata), __FILE__, __func__, __LINE__)
+#define P101_TRACK_RESOURCE_TRANSFER(env, resource_class, resource_id, related_id, metadata) p101_env_track_resource((env), P101_ENV_RESOURCE_TRANSFER, (resource_class), (resource_id), (related_id), 0U, (metadata), __FILE__, __func__, __LINE__)
 #define P101_ENV_POINTER_RESOURCE_ID_SIZE (2U + (sizeof(uintptr_t) * 2U) + 1U)
-#define P101_TRACK_POINTER_RESOURCE_ACQUIRE(env, resource_class, resource, size, metadata) p101_env_track_pointer_resource((env), P101_TOOL_EVENT_RESOURCE_ACQUIRE, (resource_class), (resource), NULL, (size), (metadata), __FILE__, __func__, __LINE__)
-#define P101_TRACK_POINTER_RESOURCE_RELEASE(env, resource_class, resource, metadata) p101_env_track_pointer_resource((env), P101_TOOL_EVENT_RESOURCE_RELEASE, (resource_class), (resource), NULL, 0U, (metadata), __FILE__, __func__, __LINE__)
+#define P101_TRACK_POINTER_RESOURCE_ACQUIRE(env, resource_class, resource, size, metadata) p101_env_track_pointer_resource((env), P101_ENV_RESOURCE_ACQUIRE, (resource_class), (resource), NULL, (size), (metadata), __FILE__, __func__, __LINE__)
+#define P101_TRACK_POINTER_RESOURCE_RELEASE(env, resource_class, resource, metadata) p101_env_track_pointer_resource((env), P101_ENV_RESOURCE_RELEASE, (resource_class), (resource), NULL, 0U, (metadata), __FILE__, __func__, __LINE__)
 #define P101_TRACK_POINTER_RESOURCE_REPLACE(env, resource_class, resource, related_resource, size, metadata)                                                                                                                                                       \
-    p101_env_track_pointer_resource((env), P101_TOOL_EVENT_RESOURCE_REPLACE, (resource_class), (resource), (related_resource), (size), (metadata), __FILE__, __func__, __LINE__)
+    p101_env_track_pointer_resource((env), P101_ENV_RESOURCE_REPLACE, (resource_class), (resource), (related_resource), (size), (metadata), __FILE__, __func__, __LINE__)
 #define P101_TRACK_POINTER_RESOURCE_TRANSFER(env, resource_class, resource, related_resource, metadata)                                                                                                                                                            \
-    p101_env_track_pointer_resource((env), P101_TOOL_EVENT_RESOURCE_TRANSFER, (resource_class), (resource), (related_resource), 0U, (metadata), __FILE__, __func__, __LINE__)
-#define P101_TRACK_INTEGER_RESOURCE_ACQUIRE(env, resource_class, resource, size, metadata) p101_env_track_integer_resource((env), P101_TOOL_EVENT_RESOURCE_ACQUIRE, (resource_class), (intmax_t)(resource), 0, (size), (metadata), __FILE__, __func__, __LINE__)
-#define P101_TRACK_INTEGER_RESOURCE_RELEASE(env, resource_class, resource, metadata) p101_env_track_integer_resource((env), P101_TOOL_EVENT_RESOURCE_RELEASE, (resource_class), (intmax_t)(resource), 0, 0U, (metadata), __FILE__, __func__, __LINE__)
+    p101_env_track_pointer_resource((env), P101_ENV_RESOURCE_TRANSFER, (resource_class), (resource), (related_resource), 0U, (metadata), __FILE__, __func__, __LINE__)
+#define P101_TRACK_INTEGER_RESOURCE_ACQUIRE(env, resource_class, resource, size, metadata) p101_env_track_integer_resource((env), P101_ENV_RESOURCE_ACQUIRE, (resource_class), (intmax_t)(resource), 0, (size), (metadata), __FILE__, __func__, __LINE__)
+#define P101_TRACK_INTEGER_RESOURCE_RELEASE(env, resource_class, resource, metadata) p101_env_track_integer_resource((env), P101_ENV_RESOURCE_RELEASE, (resource_class), (intmax_t)(resource), 0, 0U, (metadata), __FILE__, __func__, __LINE__)
 #define P101_TRACK_INTEGER_RESOURCE_REPLACE(env, resource_class, resource, related_resource, size, metadata)                                                                                                                                                       \
-    p101_env_track_integer_resource((env), P101_TOOL_EVENT_RESOURCE_REPLACE, (resource_class), (intmax_t)(resource), (intmax_t)(related_resource), (size), (metadata), __FILE__, __func__, __LINE__)
+    p101_env_track_integer_resource((env), P101_ENV_RESOURCE_REPLACE, (resource_class), (intmax_t)(resource), (intmax_t)(related_resource), (size), (metadata), __FILE__, __func__, __LINE__)
 #define P101_TRACK_INTEGER_RESOURCE_TRANSFER(env, resource_class, resource, related_resource, metadata)                                                                                                                                                            \
-    p101_env_track_integer_resource((env), P101_TOOL_EVENT_RESOURCE_TRANSFER, (resource_class), (intmax_t)(resource), (intmax_t)(related_resource), 0U, (metadata), __FILE__, __func__, __LINE__)
+    p101_env_track_integer_resource((env), P101_ENV_RESOURCE_TRANSFER, (resource_class), (intmax_t)(resource), (intmax_t)(related_resource), 0U, (metadata), __FILE__, __func__, __LINE__)
 
 #ifdef __cplusplus
 }

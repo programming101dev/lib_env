@@ -161,7 +161,7 @@ record as one locked stream write. If any event or fault-log write fails,
 `p101_env_event_log_errno()` returns the first recorded error. Destruction also
 prints a warning to `stderr` and writes a `P101COMPLETE` receipt to each
 built-in event stream. The receipt records whether any earlier event write
-failed; if destruction never runs, v3 consumers treat the missing receipt as
+failed; if destruction never runs, v4 consumers treat the missing receipt as
 incomplete evidence. A partial instrumentation log therefore cannot look
 silently complete. The environment's other mutable configuration remains
 caller-synchronized. One env per thread remains the general rule; the built-in
