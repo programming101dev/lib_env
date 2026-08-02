@@ -27,8 +27,45 @@ done
 
 [ -d test ] && [ -f test/CMakeLists.txt ] || { echo "No test/ tree here." >&2; exit 1; }
 
+# An aggregate runner may require tests for a particular compiler even when a
+# coverage or conformance pass most recently updated a different build marker.
+lang="C"; [ -f config.cmake ] && lang="$(sed -n 's/.*set(PROJECT_LANGUAGE[[:space:]]*"\{0,1\}\([A-Za-z]*\).*/\1/p' config.cmake | head -1)"
+requested_compiler="${P101_TEST_CC:-}"
+if [ "$lang" = "CXX" ] || [ "$lang" = "CPP" ]; then
+  requested_compiler="${P101_TEST_CXX:-}"
+fi
+
+p101_find_compiler_build() {
+  local requested="$1" cache_key="$2" marker candidate cached
+
+  for marker in .last-runtime-build-dir .last-build-dir; do
+    if [ -f "$marker" ]; then
+      candidate="$(cat "$marker")"
+      if [ -f "$candidate/CMakeCache.txt" ]; then
+        cached="$(sed -n "s/^${cache_key}:[^=]*=//p" "$candidate/CMakeCache.txt" | head -1)"
+        [ "$cached" != "$requested" ] || { printf '%s' "$candidate"; return 0; }
+      fi
+    fi
+  done
+  for candidate in build-*; do
+    [ -f "$candidate/CMakeCache.txt" ] || continue
+    cached="$(sed -n "s/^${cache_key}:[^=]*=//p" "$candidate/CMakeCache.txt" | head -1)"
+    [ "$cached" != "$requested" ] || { printf '%s' "$candidate"; return 0; }
+  done
+  return 1
+}
+
 main_bd="build"
-if [ -f .last-runtime-build-dir ]; then
+if [ -n "$requested_compiler" ]; then
+  cache_key="CMAKE_C_COMPILER"
+  if [ "$lang" = "CXX" ] || [ "$lang" = "CPP" ]; then
+    cache_key="CMAKE_CXX_COMPILER"
+  fi
+  main_bd="$(p101_find_compiler_build "$requested_compiler" "$cache_key")" || {
+    echo "No configured main build uses requested compiler '$requested_compiler'." >&2
+    exit 1
+  }
+elif [ -f .last-runtime-build-dir ]; then
   main_bd="$(cat .last-runtime-build-dir)"
 elif [ -f .last-build-dir ]; then
   main_bd="$(cat .last-build-dir)"
@@ -36,7 +73,6 @@ fi
 [ -f "$main_bd/CMakeCache.txt" ] || { echo "No configured main build ('$main_bd'). Run ./change-compiler.sh first." >&2; exit 1; }
 
 # project language decides which compiler the test tree needs
-lang="C"; [ -f config.cmake ] && lang="$(sed -n 's/.*set(PROJECT_LANGUAGE[[:space:]]*"\{0,1\}\([A-Za-z]*\).*/\1/p' config.cmake | head -1)"
 if [ "$lang" = "CXX" ] || [ "$lang" = "CPP" ]; then
   comp="$(sed -n 's/^CMAKE_CXX_COMPILER:[^=]*=//p' "$main_bd/CMakeCache.txt" | head -1)"
   compflag="-DCMAKE_CXX_COMPILER=$comp"
