@@ -112,6 +112,7 @@ P101_FAULT_CALL=3 ./program
 P101_FAULT_CALL=2 P101_FAULT_ERRNO=5 P101_FAULT_NAME=open ./program
 P101_FAULT_CALL=2 P101_FAULT_LOG=fault.log ./program
 P101_FAULT_CALL=2 P101_FAULT_NAME=read P101_FAULT_MODE=short P101_FAULT_AMOUNT=4 ./program
+P101_FAULT_CALL=2 P101_FAULT_NAME=write P101_FAULT_MODE=uncertain ./program
 P101_FAULT_CALL=2 P101_FAULT_MODE=eintr P101_FAULT_REPEAT=3 ./program
 ```
 
@@ -121,15 +122,18 @@ P101_FAULT_CALL=2 P101_FAULT_MODE=eintr P101_FAULT_REPEAT=3 ./program
   default is `EIO`.
 - `P101_FAULT_NAME=name` optionally narrows counting to one wrapper name, such
   as `open`, `read`, or `socket`.
-- `P101_FAULT_MODE=error|eintr|timeout|short` selects a hard failure, an
+- `P101_FAULT_MODE=error|eintr|timeout|short|uncertain` selects a hard failure, an
   `EINTR` failure, a timeout-style failure, or a successful short I/O. Short
-  mode is currently implemented by `read`, `write`, `pread`, and `pwrite`.
+  and uncertain modes are currently implemented by `read`, `write`, `pread`,
+  and `pwrite`. Uncertain mode performs the real operation but hides its
+  success with `ETIMEDOUT`, so callers must not assume an automatic retry is
+  safe.
 - `P101_FAULT_AMOUNT=N` sets the maximum byte count passed to a wrapper during
   short-I/O injection. The default is one byte.
 - `P101_FAULT_REPEAT=N` injects the selected behavior for `N` consecutive
   matching calls. This makes retry loops and repeated interruption testable.
 - `P101_FAULT_LOG=path` records when a configured fault actually fires:
-  `P101FAULT<TAB>2<TAB>pid<TAB>call-index<TAB>call-name<TAB>errno<TAB>mode<TAB>amount`. The
+  `P101FAULT<TAB>3<TAB>pid<TAB>call-index<TAB>call-name<TAB>errno<TAB>mode<TAB>amount<TAB>phase<TAB>disposition`. The
   `error-path-walk` tool uses this to stop automatically when it has walked
   past the last fault-capable call.
 

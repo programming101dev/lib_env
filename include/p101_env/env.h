@@ -52,6 +52,8 @@ extern "C"
 {
 #endif
 
+#define P101_ENV_EVENT_RUN_ID_ENV "P101_EVENT_RUN_ID"
+
     struct p101_env;
 
     /* line_number is int to match __LINE__ and p101_error's line numbers. */
@@ -154,13 +156,16 @@ extern "C"
      * The environment bridge also understands P101_FAULT_LOG=path. When a
      * configured fault actually fires it writes:
      *
-     *   P101FAULT<TAB>2<TAB>pid<TAB>call-index<TAB>call-name<TAB>errno<TAB>mode<TAB>amount
+     *   P101FAULT<TAB>3<TAB>pid<TAB>call-index<TAB>call-name<TAB>errno<TAB>mode<TAB>amount<TAB>phase<TAB>disposition
      *
      * This is intentionally separate from P101_RESOURCE_LOG; launchers use it
      * as a control signal to stop after the last fault-capable call.
-     * P101_FAULT_MODE may be error, eintr, timeout, or short;
+     * P101_FAULT_MODE may be error, eintr, timeout, short, or uncertain;
      * P101_FAULT_AMOUNT bounds supported short-I/O calls and
-     * P101_FAULT_REPEAT exercises repeated retry paths.
+     * P101_FAULT_REPEAT exercises repeated retry paths. Before-call failures
+     * are recorded when selected. A wrapper must call
+     * p101_env_record_fault_action() only after an after-dispatch or
+     * partial-progress action has actually occurred.
      */
     typedef int (*p101_env_fault_injector)(const struct p101_env *env, const char *call_name, void *user_data);
 
@@ -168,19 +173,38 @@ extern "C"
     {
         P101_ENV_FAULT_NONE = 0,
         P101_ENV_FAULT_ERROR,
-        P101_ENV_FAULT_SHORT
+        P101_ENV_FAULT_SHORT,
+        P101_ENV_FAULT_UNCERTAIN
     } p101_env_fault_kind;
+
+    typedef enum
+    {
+        P101_ENV_FAULT_BEFORE_CALL = 0,
+        P101_ENV_FAULT_AFTER_DISPATCH,
+        P101_ENV_FAULT_AFTER_PARTIAL_PROGRESS
+    } p101_env_fault_phase;
+
+    typedef enum
+    {
+        P101_ENV_FAULT_RETRY_SAFE = 0,
+        P101_ENV_FAULT_PROGRESS_KNOWN,
+        P101_ENV_FAULT_OUTCOME_UNCERTAIN
+    } p101_env_fault_disposition;
 
     struct p101_env_fault_action
     {
-        p101_env_fault_kind kind;
-        int                 errnum;
-        size_t              amount;
+        p101_env_fault_kind        kind;
+        p101_env_fault_phase       phase;
+        p101_env_fault_disposition disposition;
+        int                        errnum;
+        size_t                     amount;
+        unsigned long              call_index;
     };
 
     void p101_env_set_fault_injector(struct p101_env *env, p101_env_fault_injector injector, void *user_data);
     int  p101_env_check_fault(const struct p101_env *env, const char *call_name);
     int  p101_env_check_fault_action(const struct p101_env *env, const char *call_name, struct p101_env_fault_action *action);
+    void p101_env_record_fault_action(const struct p101_env *env, const char *call_name, const struct p101_env_fault_action *action);
 
     /*
      * File-descriptor ledger (opt-in). When enabled, wrappers that open or

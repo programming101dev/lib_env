@@ -53,6 +53,36 @@
         }                                                               \
     } while(0)
 
+#define P101_WRAPPER_FAULT_RETURN_SYSTEM(env, err, failure_value)        \
+    do                                                                  \
+    {                                                                   \
+        int p101_wrapper_fault_code_;                                   \
+                                                                        \
+        p101_wrapper_fault_code_ = p101_env_check_fault((env), __func__ + 5); \
+        if(p101_wrapper_fault_code_ != 0)                               \
+        {                                                               \
+            P101_ERROR_RAISE_SYSTEM((err), "injected wrapper failure",  \
+                                    p101_wrapper_fault_code_);           \
+            P101_TRACE_EXIT(env);                                       \
+            return (failure_value);                                     \
+        }                                                               \
+    } while(0)
+
+#define P101_WRAPPER_FAULT_RETURN_SYSTEM_CODE(env, err)                  \
+    do                                                                  \
+    {                                                                   \
+        int p101_wrapper_fault_code_;                                   \
+                                                                        \
+        p101_wrapper_fault_code_ = p101_env_check_fault((env), __func__ + 5); \
+        if(p101_wrapper_fault_code_ != 0)                               \
+        {                                                               \
+            P101_ERROR_RAISE_SYSTEM((err), "injected wrapper failure",  \
+                                    p101_wrapper_fault_code_);           \
+            P101_TRACE_EXIT(env);                                       \
+            return p101_wrapper_fault_code_;                            \
+        }                                                               \
+    } while(0)
+
 #define P101_WRAPPER_FAULT_RETURN_VOID(env, err)                         \
     do                                                                  \
     {                                                                   \

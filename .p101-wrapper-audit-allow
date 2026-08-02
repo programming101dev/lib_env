@@ -29,6 +29,10 @@ src/env.c:*:strcmp
 src/env.c:*:strlen
 src/env.c:*:strtoul
 src/env.c:*:sysconf
+# Run identity is initialized while lib_env itself is being constructed.
+# Calling p101_timespec_get here would recurse upward through lib_c into the
+# environment whose identity does not yet exist.
+src/env.c:p101_env_initialize_run_id:timespec_get
 src/env.c:p101_env_log_fault_hit:flockfile
 src/env.c:p101_env_log_fault_hit:funlockfile
 # User-supplied observer and tracer callbacks are intentional indirect-call

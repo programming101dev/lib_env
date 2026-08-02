@@ -51,12 +51,13 @@ static void make_path(char path[], size_t path_size, const char *suffix)
 static void test_event_parser_contract(void)
 {
     struct p101_tool_event_record record;
-    char                         escaped[] = "P101CALL\t4\t42\t1\t1\t100\t200\tENTER\t7\tfun\\tname\tcall\\\\name\targ\\ntext\t-\tfile\\tname.c\n";
-    char                         exec_fail[] = "P101EXECFAIL\t4\t42\t1\t2\t101\t201\t9\tp101_execv\tfile.c\t/bin/missing\n";
-    char                         spawn[] = "P101SPAWN\t4\t42\t1\t3\t102\t202\t43\t10\tp101_posix_spawn\tspawn.c\t/bin/true\n";
-    char                         v1[]      = "P101FD\t1\t42\tOPEN\t3\t7\tmain\tfile.c\n";
+    char                          escaped[]   = "P101CALL\t5\ttest-run\t42\t1\t1\t100\t200\tENTER\t7\tfun\\tname\tcall\\\\name\targ\\ntext\t-\tfile\\tname.c\n";
+    char                          exec_fail[] = "P101EXECFAIL\t5\ttest-run\t42\t1\t2\t101\t201\t9\tp101_execv\tfile.c\t/bin/missing\n";
+    char                          spawn[]     = "P101SPAWN\t5\ttest-run\t42\t1\t3\t102\t202\t43\t10\tp101_posix_spawn\tspawn.c\t/bin/true\n";
+    char                          v1[]        = "P101FD\t1\t42\tOPEN\t3\t7\tmain\tfile.c\n";
 
     EXPECT(p101_tool_event_parse_line(escaped, &record) == P101_TOOL_EVENT_PARSE_OK);
+    EXPECT(strcmp(record.run_id, "test-run") == 0);
     EXPECT(strcmp(record.function_name, "fun\tname") == 0);
     EXPECT(strcmp(record.call_name, "call\\name") == 0);
     EXPECT(strcmp(record.arguments, "arg\ntext") == 0);
@@ -86,12 +87,12 @@ static void test_reader_terminates_on_error(void)
 
 static void test_long_record_round_trip(void)
 {
-    struct p101_error           *err;
-    struct p101_env             *env;
+    struct p101_error            *err;
+    struct p101_env              *env;
     struct p101_tool_event_record record;
-    FILE                        *stream;
-    char                        *line;
-    char                         long_name[1500];
+    FILE                         *stream;
+    char                         *line;
+    char                          long_name[1500];
 
     err    = p101_error_create(false);
     env    = p101_env_create(err, NULL);
@@ -120,11 +121,11 @@ static void test_long_record_round_trip(void)
 
 static void test_generic_resource_round_trip(void)
 {
-    struct p101_error        *err;
-    struct p101_env          *env;
-    struct p101_tool_event_record  record;
-    FILE                     *stream;
-    char                      line[2048];
+    struct p101_error            *err;
+    struct p101_env              *env;
+    struct p101_tool_event_record record;
+    FILE                         *stream;
+    char                          line[2048];
 
     err    = p101_error_create(false);
     env    = p101_env_create(err, NULL);
@@ -244,17 +245,17 @@ static void *write_concurrent_events(void *data)
 
 static void test_concurrent_event_sequences(void)
 {
-    struct concurrent_writer writers[CONCURRENT_THREAD_COUNT];
-    pthread_t                 threads[CONCURRENT_THREAD_COUNT];
-    struct p101_tool_event_record  record;
-    struct p101_error        *err;
-    struct p101_env          *env;
-    FILE                     *stream;
-    unsigned char            *seen;
-    char                      line[2048];
-    size_t                    count;
-    size_t                    index;
-    int                       created[CONCURRENT_THREAD_COUNT] = {0};
+    struct concurrent_writer      writers[CONCURRENT_THREAD_COUNT];
+    pthread_t                     threads[CONCURRENT_THREAD_COUNT];
+    struct p101_tool_event_record record;
+    struct p101_error            *err;
+    struct p101_env              *env;
+    FILE                         *stream;
+    unsigned char                *seen;
+    char                          line[2048];
+    size_t                        count;
+    size_t                        index;
+    int                           created[CONCURRENT_THREAD_COUNT] = {0};
 
     err    = p101_error_create(false);
     env    = p101_env_create(err, NULL);
@@ -282,7 +283,7 @@ static void test_concurrent_event_sequences(void)
     {
         writers[index].env           = env;
         writers[index].thread_number = index;
-        created[index]                = pthread_create(&threads[index], NULL, write_concurrent_events, &writers[index]) == 0 ? 1 : 0;
+        created[index]               = pthread_create(&threads[index], NULL, write_concurrent_events, &writers[index]) == 0 ? 1 : 0;
         EXPECT(created[index] != 0);
     }
 
@@ -353,6 +354,8 @@ static void test_short_fault_action_repeats(void)
     EXPECT(p101_env_check_fault_action(env, "p101_read", &action) == 0);
     EXPECT(p101_env_check_fault_action(env, "p101_read", &action) != 0);
     EXPECT(action.kind == P101_ENV_FAULT_SHORT);
+    EXPECT(action.phase == P101_ENV_FAULT_AFTER_PARTIAL_PROGRESS);
+    EXPECT(action.disposition == P101_ENV_FAULT_PROGRESS_KNOWN);
     EXPECT(action.amount == 3U);
     EXPECT(p101_env_check_fault_action(env, "p101_read", &action) != 0);
     EXPECT(action.kind == P101_ENV_FAULT_SHORT);
@@ -360,6 +363,57 @@ static void test_short_fault_action_repeats(void)
 
     p101_env_destroy(env);
     p101_error_destroy(err);
+}
+
+static void test_uncertain_fault_action_describes_hidden_outcome(void)
+{
+    struct p101_env_fault_action action;
+    struct p101_error           *err;
+    struct p101_env             *env;
+    FILE                        *stream;
+    char                         line[256];
+    char                         path[256];
+
+    make_path(path, sizeof(path), "uncertain-fault");
+    EXPECT(setenv("P101_FAULT_CALL", "1", 1) == 0);
+    EXPECT(setenv("P101_FAULT_MODE", "uncertain", 1) == 0);
+    EXPECT(setenv("P101_FAULT_NAME", "write", 1) == 0);
+    EXPECT(setenv("P101_FAULT_LOG", path, 1) == 0);
+    err = p101_error_create(false);
+    env = p101_env_create(err, NULL);
+    EXPECT(unsetenv("P101_FAULT_CALL") == 0);
+    EXPECT(unsetenv("P101_FAULT_MODE") == 0);
+    EXPECT(unsetenv("P101_FAULT_NAME") == 0);
+    EXPECT(unsetenv("P101_FAULT_LOG") == 0);
+    EXPECT(err != NULL);
+    EXPECT(env != NULL);
+
+    EXPECT(p101_env_check_fault_action(env, "write", &action) != 0);
+    EXPECT(action.kind == P101_ENV_FAULT_UNCERTAIN);
+    EXPECT(action.phase == P101_ENV_FAULT_AFTER_DISPATCH);
+    EXPECT(action.disposition == P101_ENV_FAULT_OUTCOME_UNCERTAIN);
+    EXPECT(action.errnum == ETIMEDOUT);
+    stream = fopen(path, "r");
+    EXPECT(stream != NULL);
+    if(stream != NULL)
+    {
+        EXPECT(fgetc(stream) == EOF);
+        fclose(stream);
+    }
+    p101_env_record_fault_action(env, "write", &action);
+
+    p101_env_destroy(env);
+    p101_error_destroy(err);
+
+    stream = fopen(path, "r");
+    EXPECT(stream != NULL);
+    if(stream != NULL)
+    {
+        EXPECT(fgets(line, sizeof(line), stream) != NULL);
+        EXPECT(strstr(line, "\tuncertain\t1\tafter-dispatch\toutcome-uncertain\n") != NULL);
+        fclose(stream);
+    }
+    remove(path);
 }
 
 static void test_dup_keeps_owned_destination(void)
@@ -391,7 +445,7 @@ static void test_dup_keeps_owned_destination(void)
     if(stream != NULL)
     {
         EXPECT(fgets(line, sizeof(line), stream) != NULL);
-        EXPECT(strncmp(line, "P101FD\t4\t", strlen("P101FD\t4\t")) == 0);
+        EXPECT(strncmp(line, "P101FD\t5\t", strlen("P101FD\t5\t")) == 0);
         fclose(stream);
     }
     remove(path);
@@ -424,10 +478,56 @@ static void test_observers_remain_independent(void)
     if(stream != NULL)
     {
         EXPECT(fgets(line, sizeof(line), stream) != NULL);
-        EXPECT(strncmp(line, "P101ALLOC\t4\t", strlen("P101ALLOC\t4\t")) == 0);
+        EXPECT(strncmp(line, "P101ALLOC\t5\t", strlen("P101ALLOC\t5\t")) == 0);
         fclose(stream);
     }
     remove(path);
+}
+
+static void test_event_run_identity(void)
+{
+    struct p101_error            *err;
+    struct p101_env              *env;
+    struct p101_tool_event_record record;
+    FILE                         *stream;
+    char                          line[2048];
+    char                          too_long[P101_TOOL_EVENT_RUN_ID_MAX_BYTES + 2U];
+
+    EXPECT(setenv(P101_ENV_EVENT_RUN_ID_ENV, "env-test-run", 1) == 0);
+    err    = p101_error_create(false);
+    env    = p101_env_create(err, NULL);
+    stream = tmpfile();
+    EXPECT(unsetenv(P101_ENV_EVENT_RUN_ID_ENV) == 0);
+    EXPECT(err != NULL);
+    EXPECT(env != NULL);
+    EXPECT(stream != NULL);
+    if(env != NULL && stream != NULL)
+    {
+        p101_env_set_fd_log(env, stream);
+        p101_env_track_open(env, 19, "identity.c", "open_identity", 7);
+        p101_env_destroy(env);
+        env = NULL;
+        rewind(stream);
+        EXPECT(fgets(line, sizeof(line), stream) != NULL);
+        EXPECT(p101_tool_event_parse_line(line, &record) == P101_TOOL_EVENT_PARSE_OK);
+        EXPECT(strcmp(record.run_id, "env-test-run") == 0);
+    }
+    p101_env_destroy(env);
+    if(stream != NULL)
+    {
+        fclose(stream);
+    }
+
+    memset(too_long, 'x', sizeof(too_long) - 1U);
+    too_long[sizeof(too_long) - 1U] = '\0';
+    p101_error_reset(err);
+    EXPECT(setenv(P101_ENV_EVENT_RUN_ID_ENV, too_long, 1) == 0);
+    env = p101_env_create(err, NULL);
+    EXPECT(unsetenv(P101_ENV_EVENT_RUN_ID_ENV) == 0);
+    EXPECT(env == NULL);
+    EXPECT(p101_error_is_errno(err, EINVAL));
+    p101_env_destroy(env);
+    p101_error_destroy(err);
 }
 
 static void test_distinct_manual_streams_receive_completion(void)
@@ -477,7 +577,7 @@ static void test_distinct_manual_streams_receive_completion(void)
     rewind(alloc_stream);
     while(fgets(line, sizeof(line), alloc_stream) != NULL)
     {
-        if(strncmp(line, "P101COMPLETE\t4\t", strlen("P101COMPLETE\t4\t")) == 0)
+        if(strncmp(line, "P101COMPLETE\t5\t", strlen("P101COMPLETE\t5\t")) == 0)
         {
             alloc_complete++;
         }
@@ -486,7 +586,7 @@ static void test_distinct_manual_streams_receive_completion(void)
     rewind(fd_stream);
     while(fgets(line, sizeof(line), fd_stream) != NULL)
     {
-        if(strncmp(line, "P101COMPLETE\t4\t", strlen("P101COMPLETE\t4\t")) == 0)
+        if(strncmp(line, "P101COMPLETE\t5\t", strlen("P101COMPLETE\t5\t")) == 0)
         {
             fd_complete++;
         }
@@ -539,7 +639,8 @@ static void test_dup_keeps_fault_configuration(void)
     if(stream != NULL)
     {
         EXPECT(fgets(line, sizeof(line), stream) != NULL);
-        EXPECT(strncmp(line, "P101FAULT\t2\t", strlen("P101FAULT\t2\t")) == 0);
+        EXPECT(strncmp(line, "P101FAULT\t3\t", strlen("P101FAULT\t3\t")) == 0);
+        EXPECT(strstr(line, "\tbefore-call\tretry-safe\n") != NULL);
         fclose(stream);
     }
     remove(path);
@@ -559,8 +660,10 @@ int main(void)
     test_scope_trace_pairs_entry_and_exit();
     test_concurrent_event_sequences();
     test_short_fault_action_repeats();
+    test_uncertain_fault_action_describes_hidden_outcome();
     test_dup_keeps_owned_destination();
     test_observers_remain_independent();
+    test_event_run_identity();
     test_distinct_manual_streams_receive_completion();
     test_dup_keeps_fault_configuration();
 

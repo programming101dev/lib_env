@@ -47,21 +47,26 @@ struct p101_fd_ledger
 
 struct p101_env_fault_state
 {
-    unsigned long       target_call;
-    atomic_ulong        calls_seen;
-    unsigned long       repeat;
-    int                 errnum;
-    p101_env_fault_kind kind;
-    const char         *mode_name;
-    size_t              amount;
-    char               *call_name;
-    FILE               *log_stream;
-    char               *log_path;
-    int                 log_owned;
+    unsigned long              target_call;
+    atomic_ulong               calls_seen;
+    unsigned long              repeat;
+    int                        errnum;
+    p101_env_fault_kind        kind;
+    p101_env_fault_phase       phase;
+    p101_env_fault_disposition disposition;
+    const char                *mode_name;
+    const char                *phase_name;
+    const char                *disposition_name;
+    size_t                     amount;
+    char                      *call_name;
+    FILE                      *log_stream;
+    char                      *log_path;
+    int                        log_owned;
 };
 
 struct p101_env_event_state
 {
+    char               run_id[P101_TOOL_EVENT_RUN_ID_MAX_BYTES + 1U];
     unsigned long long context_id;
     atomic_ullong      next_sequence;
     atomic_int         write_failed;
@@ -116,6 +121,7 @@ enum
 
 static void                          p101_env_init(struct p101_env *env, p101_env_tracer tracer);
 static void                          p101_env_init_event_state(struct p101_env *env, struct p101_error *err);
+static int                           p101_env_initialize_run_id(struct p101_error *err, char run_id[P101_TOOL_EVENT_RUN_ID_MAX_BYTES + 1U]);
 static void                          p101_env_configure_from_environment(struct p101_env *env, struct p101_error *err);
 static void                          p101_env_configure_fault_from_environment(struct p101_env *env, struct p101_error *err);
 static void                          p101_env_configure_fd_log_from_environment(struct p101_env *env, struct p101_error *err);
@@ -129,7 +135,7 @@ static void                          p101_env_close_owned_resource_log_if_unused
 static void                          p101_env_close_owned_call_log(struct p101_env *env);
 static struct p101_env_fault_state  *p101_env_fault_state_dup(struct p101_error *err, const struct p101_env_fault_state *source);
 static void                          p101_env_fault_state_destroy(struct p101_env_fault_state *state);
-static void                          p101_env_log_fault_hit(const struct p101_env *env, const struct p101_env_fault_state *state, const char *call_name);
+static void                          p101_env_log_fault_hit(const struct p101_env *env, const struct p101_env_fault_state *state, const char *call_name, unsigned long call_index);
 static int                           p101_env_environment_fault_injector(const struct p101_env *env, const char *call_name, void *user_data);
 static int                           p101_env_environment_fault_action(const struct p101_env *env, const char *call_name, void *user_data, struct p101_env_fault_action *action);
 static unsigned long                 p101_env_parse_unsigned_environment(const char *text, unsigned long default_value, int *ok);
@@ -158,7 +164,10 @@ static void                          p101_env_resource_log_observer(const struct
 static void                          p101_env_call_notify(const struct p101_env *env, p101_env_call_event event, const char *call_name, const char *arguments, const char *result, const char *file_name, const char *function_name, int line_number);
 static void p101_env_call_log_observer(const struct p101_env *env, p101_env_call_event event, const char *call_name, const char *arguments, const char *result, const char *file_name, const char *function_name, int line_number, void *user_data);
 
-static atomic_ullong p101_env_next_context_id = 0;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
+static atomic_ullong p101_env_next_context_id = 0;                                      // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
+static atomic_ullong p101_env_run_generation  = 0;                                      // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
+static atomic_flag   p101_env_run_id_lock     = ATOMIC_FLAG_INIT;                       // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
+static char          p101_env_process_run_id[P101_TOOL_EVENT_RUN_ID_MAX_BYTES + 1U];    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 
 struct p101_env *p101_env_create(struct p101_error *err, p101_env_tracer tracer)
 {
@@ -373,6 +382,12 @@ static void p101_env_init_event_state(struct p101_env *env, struct p101_error *e
         P101_ERROR_RAISE_ERRNO(err, errno);
         return;
     }
+    if(p101_env_initialize_run_id(err, env->event_state->run_id) != 0)
+    {
+        free(env->event_state);
+        env->event_state = NULL;
+        return;
+    }
 
     env->event_state->context_id = atomic_fetch_add_explicit(&p101_env_next_context_id, 1ULL, memory_order_relaxed) + 1ULL;
     atomic_init(&env->event_state->next_sequence, 0ULL);
@@ -387,6 +402,56 @@ static void p101_env_init_event_state(struct p101_env *env, struct p101_error *e
         atomic_init(&env->event_state->stream_counters[index].pid, (long)getpid());
         atomic_init(&env->event_state->stream_counters[index].attempts, 0ULL);
     }
+}
+
+static int p101_env_initialize_run_id(struct p101_error *err, char run_id[P101_TOOL_EVENT_RUN_ID_MAX_BYTES + 1U])
+{
+    const char *configured;
+    size_t      length;
+
+    configured = getenv(P101_ENV_EVENT_RUN_ID_ENV);
+    if(configured != NULL && configured[0] != '\0')
+    {
+        length = strlen(configured);
+        if(length > P101_TOOL_EVENT_RUN_ID_MAX_BYTES)
+        {
+            P101_ERROR_RAISE_ERRNO(err, EINVAL);
+            return -1;
+        }
+        memcpy(run_id, configured, length + 1U);
+        return 0;
+    }
+
+    while(atomic_flag_test_and_set_explicit(&p101_env_run_id_lock, memory_order_acquire))
+    {
+    }
+    if(p101_env_process_run_id[0] == '\0')
+    {
+        struct timespec    now;
+        unsigned long long generation;
+        int                written;
+
+        generation = atomic_fetch_add_explicit(&p101_env_run_generation, 1ULL, memory_order_relaxed) + 1ULL;
+        if(timespec_get(&now, TIME_UTC) != TIME_UTC)
+        {
+            now.tv_sec  = 0;
+            now.tv_nsec = 0;
+        }
+        written = snprintf(p101_env_process_run_id, sizeof(p101_env_process_run_id), "p101-%ld-%lld-%09ld-%llu", (long)getpid(), (long long)now.tv_sec, now.tv_nsec, generation);
+        if(written < 0 || (size_t)written >= sizeof(p101_env_process_run_id))
+        {
+            p101_env_process_run_id[0] = '\0';
+        }
+    }
+    if(p101_env_process_run_id[0] == '\0')
+    {
+        atomic_flag_clear_explicit(&p101_env_run_id_lock, memory_order_release);
+        P101_ERROR_RAISE_ERRNO(err, EOVERFLOW);
+        return -1;
+    }
+    memcpy(run_id, p101_env_process_run_id, sizeof(p101_env_process_run_id));
+    atomic_flag_clear_explicit(&p101_env_run_id_lock, memory_order_release);
+    return 0;
 }
 
 static void p101_env_configure_from_environment(struct p101_env *env, struct p101_error *err)
@@ -461,15 +526,19 @@ static void p101_env_configure_fault_from_environment(struct p101_env *env, stru
 
     state->target_call = target_call;
     atomic_init(&state->calls_seen, 0UL);
-    state->repeat     = 1UL;
-    state->errnum     = fault_errno;
-    state->kind       = P101_ENV_FAULT_ERROR;
-    state->mode_name  = "error";
-    state->amount     = 1U;
-    state->call_name  = NULL;
-    state->log_stream = NULL;
-    state->log_path   = NULL;
-    state->log_owned  = 0;
+    state->repeat           = 1UL;
+    state->errnum           = fault_errno;
+    state->kind             = P101_ENV_FAULT_ERROR;
+    state->phase            = P101_ENV_FAULT_BEFORE_CALL;
+    state->disposition      = P101_ENV_FAULT_RETRY_SAFE;
+    state->mode_name        = "error";
+    state->phase_name       = "before-call";
+    state->disposition_name = "retry-safe";
+    state->amount           = 1U;
+    state->call_name        = NULL;
+    state->log_stream       = NULL;
+    state->log_path         = NULL;
+    state->log_owned        = 0;
 
     mode_text = getenv("P101_FAULT_MODE");
     if(mode_text != NULL && mode_text[0] != '\0')
@@ -492,8 +561,25 @@ static void p101_env_configure_fault_from_environment(struct p101_env *env, stru
         }
         else if(strcmp(mode_text, "short") == 0)
         {
-            state->kind      = P101_ENV_FAULT_SHORT;
-            state->mode_name = "short";
+            state->kind             = P101_ENV_FAULT_SHORT;
+            state->phase            = P101_ENV_FAULT_AFTER_PARTIAL_PROGRESS;
+            state->disposition      = P101_ENV_FAULT_PROGRESS_KNOWN;
+            state->mode_name        = "short";
+            state->phase_name       = "after-partial-progress";
+            state->disposition_name = "progress-known";
+        }
+        else if(strcmp(mode_text, "uncertain") == 0)
+        {
+            state->kind             = P101_ENV_FAULT_UNCERTAIN;
+            state->phase            = P101_ENV_FAULT_AFTER_DISPATCH;
+            state->disposition      = P101_ENV_FAULT_OUTCOME_UNCERTAIN;
+            state->mode_name        = "uncertain";
+            state->phase_name       = "after-dispatch";
+            state->disposition_name = "outcome-uncertain";
+            if(errnum_text == NULL || errnum_text[0] == '\0')
+            {
+                state->errnum = ETIMEDOUT;
+            }
         }
         else
         {
@@ -839,15 +925,19 @@ static struct p101_env_fault_state *p101_env_fault_state_dup(struct p101_error *
 
     state->target_call = source->target_call;
     atomic_init(&state->calls_seen, 0UL);
-    state->repeat     = source->repeat;
-    state->errnum     = source->errnum;
-    state->kind       = source->kind;
-    state->mode_name  = source->mode_name;
-    state->amount     = source->amount;
-    state->call_name  = NULL;
-    state->log_stream = NULL;
-    state->log_path   = NULL;
-    state->log_owned  = 0;
+    state->repeat           = source->repeat;
+    state->errnum           = source->errnum;
+    state->kind             = source->kind;
+    state->phase            = source->phase;
+    state->disposition      = source->disposition;
+    state->mode_name        = source->mode_name;
+    state->phase_name       = source->phase_name;
+    state->disposition_name = source->disposition_name;
+    state->amount           = source->amount;
+    state->call_name        = NULL;
+    state->log_stream       = NULL;
+    state->log_path         = NULL;
+    state->log_owned        = 0;
 
     if(source->call_name != NULL)
     {
@@ -907,20 +997,26 @@ static void p101_env_fault_state_destroy(struct p101_env_fault_state *state)
     free(state);
 }
 
-static void p101_env_log_fault_hit(const struct p101_env *env, const struct p101_env_fault_state *state, const char *call_name)
+static void p101_env_log_fault_hit(const struct p101_env *env, const struct p101_env_fault_state *state, const char *call_name, unsigned long call_index)
 {
-    unsigned long calls_seen;
-    int           write_result;
+    int write_result;
 
     if(state == NULL || state->log_stream == NULL)
     {
         return;
     }
 
-    calls_seen = atomic_load_explicit(&state->calls_seen, memory_order_relaxed);
     flockfile(state->log_stream);
-    write_result = fprintf(state->log_stream, "P101FAULT\t2\t%" PRIdMAX "\t%lu\t%s\t%d\t%s\t%zu\n", (intmax_t)getpid(), calls_seen, (call_name == NULL) ? "?" : call_name, state->errnum, state->mode_name,
-                           state->amount);    // NOLINT(cert-err33-c)
+    write_result = fprintf(state->log_stream,
+                           "P101FAULT\t3\t%" PRIdMAX "\t%lu\t%s\t%d\t%s\t%zu\t%s\t%s\n",
+                           (intmax_t)getpid(),
+                           call_index,
+                           (call_name == NULL) ? "?" : call_name,
+                           state->errnum,
+                           state->mode_name,
+                           state->amount,
+                           state->phase_name,
+                           state->disposition_name);    // NOLINT(cert-err33-c)
     if(write_result < 0 || fflush(state->log_stream) == EOF)
     {
         p101_env_record_event_write_failure(env);
@@ -953,10 +1049,16 @@ static int p101_env_environment_fault_action(const struct p101_env *env, const c
 
     if(calls_seen >= state->target_call && calls_seen - state->target_call < state->repeat)
     {
-        p101_env_log_fault_hit(env, state, call_name);
-        action->kind   = state->kind;
-        action->errnum = state->errnum;
-        action->amount = state->amount;
+        action->kind        = state->kind;
+        action->phase       = state->phase;
+        action->disposition = state->disposition;
+        action->errnum      = state->errnum;
+        action->amount      = state->amount;
+        action->call_index  = calls_seen;
+        if(action->phase == P101_ENV_FAULT_BEFORE_CALL)
+        {
+            p101_env_log_fault_hit(env, state, call_name, calls_seen);
+        }
         return 1;
     }
 
@@ -1288,9 +1390,12 @@ int p101_env_check_fault_action(const struct p101_env *env, const char *call_nam
     {
         return 0;
     }
-    action->kind   = P101_ENV_FAULT_NONE;
-    action->errnum = 0;
-    action->amount = 0U;
+    action->kind        = P101_ENV_FAULT_NONE;
+    action->phase       = P101_ENV_FAULT_BEFORE_CALL;
+    action->disposition = P101_ENV_FAULT_RETRY_SAFE;
+    action->errnum      = 0;
+    action->amount      = 0U;
+    action->call_index  = 0UL;
 
     if(env == NULL || env->fault_injector == NULL)
     {
@@ -1306,9 +1411,20 @@ int p101_env_check_fault_action(const struct p101_env *env, const char *call_nam
     {
         return 0;
     }
-    action->kind   = P101_ENV_FAULT_ERROR;
-    action->errnum = errnum;
+    action->kind        = P101_ENV_FAULT_ERROR;
+    action->phase       = P101_ENV_FAULT_BEFORE_CALL;
+    action->disposition = P101_ENV_FAULT_RETRY_SAFE;
+    action->errnum      = errnum;
     return 1;
+}
+
+void p101_env_record_fault_action(const struct p101_env *env, const char *call_name, const struct p101_env_fault_action *action)
+{
+    if(env == NULL || action == NULL || action->phase == P101_ENV_FAULT_BEFORE_CALL || action->call_index == 0UL || env->owned_fault_state == NULL || env->fault_injector != p101_env_environment_fault_injector)
+    {
+        return;
+    }
+    p101_env_log_fault_hit(env, env->owned_fault_state, call_name, action->call_index);
 }
 
 void p101_env_enable_fd_tracking(struct p101_env *env, struct p101_error *err)
@@ -1671,6 +1787,7 @@ static void p101_env_prepare_event_record(const struct p101_env *env, struct p10
     memset(record, 0, sizeof(*record));
     record->version     = P101_TOOL_EVENT_LOG_VERSION;
     record->record_kind = kind;
+    record->run_id      = (env == NULL || env->event_state == NULL) ? NULL : env->event_state->run_id;
     record->pid         = pid;
     record->context_id  = (env == NULL || env->event_state == NULL) ? 0U : (size_t)env->event_state->context_id;
     record->sequence    = (size_t)p101_env_next_event_sequence(env);
