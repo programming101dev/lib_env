@@ -407,11 +407,12 @@ static void p101_env_init_event_state(struct p101_env *env, struct p101_error *e
 static int p101_env_initialize_run_id(struct p101_error *err, char run_id[P101_TOOL_EVENT_RUN_ID_MAX_BYTES + 1U])
 {
     const char *configured;
-    size_t      length;
 
     configured = getenv(P101_ENV_EVENT_RUN_ID_ENV);
     if(configured != NULL && configured[0] != '\0')
     {
+        size_t length;
+
         length = strlen(configured);
         if(length > P101_TOOL_EVENT_RUN_ID_MAX_BYTES)
         {
