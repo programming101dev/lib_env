@@ -104,8 +104,12 @@ struct p101_env
     struct p101_env_event_state *event_state;
     FILE                        *owned_fd_log_stream;
     char                        *owned_fd_log_path;
+    unsigned                     owned_fd_log_domains;
+    int                          owned_fd_log_should_close;
     FILE                        *owned_call_log_stream;
     char                        *owned_call_log_path;
+    unsigned                     owned_call_log_options;
+    int                          owned_call_log_should_close;
     struct p101_env_fault_state *owned_fault_state;
 };
 
@@ -116,7 +120,11 @@ enum
     P101_ENV_NUMBER_BASE         = 10,
     P101_EXEC_SCAN_FD_FALLBACK   = 65536,
     P101_TOOL_EVENT_PARSE_FD_MAX = 1048576,
-    P101_DEFAULT_FAULT_ERRNO     = EIO
+    P101_DEFAULT_FAULT_ERRNO     = EIO,
+    P101_RESOURCE_LOG_FD         = 1U << 0U,
+    P101_RESOURCE_LOG_ALLOC      = 1U << 1U,
+    P101_RESOURCE_LOG_GENERIC    = 1U << 2U,
+    P101_EVENT_STREAM_MAX        = 6
 };
 
 static void                          p101_env_init(struct p101_env *env, p101_env_tracer tracer);
@@ -250,14 +258,18 @@ struct p101_env *p101_env_dup(struct p101_error *err, const struct p101_env *env
         new_env->resource_observer_data = env->resource_observer_data;
 
         /* The structured call observer is also a destination and is inherited. */
-        new_env->call_observer         = env->call_observer;
-        new_env->call_observer_data    = env->call_observer_data;
-        new_env->call_log_options      = env->call_log_options;
-        new_env->owned_fd_log_stream   = NULL;
-        new_env->owned_fd_log_path     = NULL;
-        new_env->owned_call_log_stream = NULL;
-        new_env->owned_call_log_path   = NULL;
-        new_env->owned_fault_state     = NULL;
+        new_env->call_observer               = env->call_observer;
+        new_env->call_observer_data          = env->call_observer_data;
+        new_env->call_log_options            = env->call_log_options;
+        new_env->owned_fd_log_stream         = NULL;
+        new_env->owned_fd_log_path           = NULL;
+        new_env->owned_fd_log_domains        = 0U;
+        new_env->owned_fd_log_should_close   = 0;
+        new_env->owned_call_log_stream       = NULL;
+        new_env->owned_call_log_path         = NULL;
+        new_env->owned_call_log_options      = P101_ENV_CALL_LOG_DEFAULT;
+        new_env->owned_call_log_should_close = 0;
+        new_env->owned_fault_state           = NULL;
 
         if(env->owned_fault_state != NULL)
         {
@@ -272,9 +284,9 @@ struct p101_env *p101_env_dup(struct p101_error *err, const struct p101_env *env
             int enable_alloc;
             int enable_resource;
 
-            enable_fd       = (env->fd_observer == p101_env_fd_log_observer && env->fd_observer_data == env->owned_fd_log_stream) ? 1 : 0;
-            enable_alloc    = (env->alloc_observer == p101_env_alloc_log_observer && env->alloc_observer_data == env->owned_fd_log_stream) ? 1 : 0;
-            enable_resource = (env->resource_observer == p101_env_resource_log_observer && env->resource_observer_data == env->owned_fd_log_stream) ? 1 : 0;
+            enable_fd       = (env->owned_fd_log_domains & P101_RESOURCE_LOG_FD) != 0U ? 1 : 0;
+            enable_alloc    = (env->owned_fd_log_domains & P101_RESOURCE_LOG_ALLOC) != 0U ? 1 : 0;
+            enable_resource = (env->owned_fd_log_domains & P101_RESOURCE_LOG_GENERIC) != 0U ? 1 : 0;
             p101_env_configure_resource_log_path(new_env, err, env->owned_fd_log_path, enable_fd, enable_alloc, enable_resource);
             if(p101_error_has_error(err))
             {
@@ -284,7 +296,7 @@ struct p101_env *p101_env_dup(struct p101_error *err, const struct p101_env *env
 
         if(env->owned_call_log_stream != NULL)
         {
-            p101_env_configure_call_log_path(new_env, err, env->owned_call_log_path, env->call_log_options);
+            p101_env_configure_call_log_path(new_env, err, env->owned_call_log_path, env->owned_call_log_options);
         }
 
         if(p101_error_has_error(err))
@@ -349,28 +361,32 @@ void p101_env_destroy(struct p101_env *env)
 
 static void p101_env_init(struct p101_env *env, p101_env_tracer tracer)
 {
-    env->tracer                 = tracer;
-    env->exit_tracer            = NULL;
-    env->tracer_data            = NULL;
-    env->label                  = NULL;
-    env->fault_injector         = NULL;
-    env->fault_data             = NULL;
-    env->fd_ledger              = NULL;
-    env->fd_observer            = NULL;
-    env->fd_observer_data       = NULL;
-    env->alloc_observer         = NULL;
-    env->alloc_observer_data    = NULL;
-    env->resource_observer      = NULL;
-    env->resource_observer_data = NULL;
-    env->call_observer          = NULL;
-    env->call_observer_data     = NULL;
-    env->call_log_options       = P101_ENV_CALL_LOG_DEFAULT;
-    env->event_state            = NULL;
-    env->owned_fd_log_stream    = NULL;
-    env->owned_fd_log_path      = NULL;
-    env->owned_call_log_stream  = NULL;
-    env->owned_call_log_path    = NULL;
-    env->owned_fault_state      = NULL;
+    env->tracer                      = tracer;
+    env->exit_tracer                 = NULL;
+    env->tracer_data                 = NULL;
+    env->label                       = NULL;
+    env->fault_injector              = NULL;
+    env->fault_data                  = NULL;
+    env->fd_ledger                   = NULL;
+    env->fd_observer                 = NULL;
+    env->fd_observer_data            = NULL;
+    env->alloc_observer              = NULL;
+    env->alloc_observer_data         = NULL;
+    env->resource_observer           = NULL;
+    env->resource_observer_data      = NULL;
+    env->call_observer               = NULL;
+    env->call_observer_data          = NULL;
+    env->call_log_options            = P101_ENV_CALL_LOG_DEFAULT;
+    env->event_state                 = NULL;
+    env->owned_fd_log_stream         = NULL;
+    env->owned_fd_log_path           = NULL;
+    env->owned_fd_log_domains        = 0U;
+    env->owned_fd_log_should_close   = 0;
+    env->owned_call_log_stream       = NULL;
+    env->owned_call_log_path         = NULL;
+    env->owned_call_log_options      = P101_ENV_CALL_LOG_DEFAULT;
+    env->owned_call_log_should_close = 0;
+    env->owned_fault_state           = NULL;
 }
 
 static void p101_env_init_event_state(struct p101_env *env, struct p101_error *err)
@@ -718,36 +734,37 @@ static void p101_env_configure_resource_log_path(struct p101_env *env, struct p1
         return;
     }
 
-    path_copy = NULL;
-    if(owned)
+    path_copy = p101_env_copy_text(err, path);
+    if(path_copy == NULL)
     {
-        path_copy = p101_env_copy_text(err, path);
-        if(path_copy == NULL)
+        if(owned)
         {
             fclose(stream);    // NOLINT(cert-err33-c)
-            return;
         }
+        return;
+    }
+    if(owned)
+    {
         setvbuf(stream, NULL, _IOLBF, 0);    // NOLINT(cert-err33-c)
-        env->owned_fd_log_stream = stream;
-        env->owned_fd_log_path   = path_copy;
     }
 
+    env->owned_fd_log_stream       = stream;
+    env->owned_fd_log_path         = path_copy;
+    env->owned_fd_log_domains      = 0U;
+    env->owned_fd_log_should_close = owned;
     if(enable_fd)
     {
-        env->fd_observer      = p101_env_fd_log_observer;
-        env->fd_observer_data = stream;
+        env->owned_fd_log_domains |= P101_RESOURCE_LOG_FD;
     }
 
     if(enable_alloc)
     {
-        env->alloc_observer      = p101_env_alloc_log_observer;
-        env->alloc_observer_data = stream;
+        env->owned_fd_log_domains |= P101_RESOURCE_LOG_ALLOC;
     }
 
     if(enable_resource)
     {
-        env->resource_observer      = p101_env_resource_log_observer;
-        env->resource_observer_data = stream;
+        env->owned_fd_log_domains |= P101_RESOURCE_LOG_GENERIC;
     }
 }
 
@@ -768,23 +785,25 @@ static void p101_env_configure_call_log_path(struct p101_env *env, struct p101_e
         return;
     }
 
-    path_copy = NULL;
-    if(owned)
+    path_copy = p101_env_copy_text(err, path);
+    if(path_copy == NULL)
     {
-        path_copy = p101_env_copy_text(err, path);
-        if(path_copy == NULL)
+        if(owned)
         {
             fclose(stream);    // NOLINT(cert-err33-c)
-            return;
         }
+        return;
+    }
+    if(owned)
+    {
         setvbuf(stream, NULL, _IOLBF, 0);    // NOLINT(cert-err33-c)
-        env->owned_call_log_stream = stream;
-        env->owned_call_log_path   = path_copy;
     }
 
-    env->call_observer      = p101_env_call_log_observer;
-    env->call_observer_data = stream;
-    env->call_log_options   = options;
+    env->owned_call_log_stream       = stream;
+    env->owned_call_log_path         = path_copy;
+    env->owned_call_log_options      = options;
+    env->owned_call_log_should_close = owned;
+    env->call_log_options            = options;
 }
 
 static FILE *p101_env_open_log_from_environment(struct p101_error *err, const char *path, int *owned)
@@ -840,26 +859,13 @@ static void p101_env_close_owned_resource_log(struct p101_env *env)
 
     stream = env->owned_fd_log_stream;
 
-    if(env->fd_observer_data == stream)
+    if(env->owned_fd_log_should_close)
     {
-        env->fd_observer      = NULL;
-        env->fd_observer_data = NULL;
+        fclose(stream);    // NOLINT(cert-err33-c)
     }
-
-    if(env->alloc_observer_data == stream)
-    {
-        env->alloc_observer      = NULL;
-        env->alloc_observer_data = NULL;
-    }
-
-    if(env->resource_observer_data == stream)
-    {
-        env->resource_observer      = NULL;
-        env->resource_observer_data = NULL;
-    }
-
-    fclose(stream);    // NOLINT(cert-err33-c)
-    env->owned_fd_log_stream = NULL;
+    env->owned_fd_log_stream       = NULL;
+    env->owned_fd_log_domains      = 0U;
+    env->owned_fd_log_should_close = 0;
     free(env->owned_fd_log_path);
     env->owned_fd_log_path = NULL;
 }
@@ -874,13 +880,17 @@ static void p101_env_close_owned_resource_log_if_unused(struct p101_env *env)
     }
 
     stream = env->owned_fd_log_stream;
-    if(env->fd_observer_data == stream || env->alloc_observer_data == stream || env->resource_observer_data == stream)
+    if(env->owned_fd_log_domains != 0U)
     {
         return;
     }
 
-    fclose(stream);    // NOLINT(cert-err33-c)
-    env->owned_fd_log_stream = NULL;
+    if(env->owned_fd_log_should_close)
+    {
+        fclose(stream);    // NOLINT(cert-err33-c)
+    }
+    env->owned_fd_log_stream       = NULL;
+    env->owned_fd_log_should_close = 0;
     free(env->owned_fd_log_path);
     env->owned_fd_log_path = NULL;
 }
@@ -895,14 +905,13 @@ static void p101_env_close_owned_call_log(struct p101_env *env)
     }
 
     stream = env->owned_call_log_stream;
-    if(env->call_observer_data == stream)
+    if(env->owned_call_log_should_close)
     {
-        env->call_observer      = NULL;
-        env->call_observer_data = NULL;
+        fclose(stream);    // NOLINT(cert-err33-c)
     }
-
-    fclose(stream);    // NOLINT(cert-err33-c)
-    env->owned_call_log_stream = NULL;
+    env->owned_call_log_stream       = NULL;
+    env->owned_call_log_options      = P101_ENV_CALL_LOG_DEFAULT;
+    env->owned_call_log_should_close = 0;
     free(env->owned_call_log_path);
     env->owned_call_log_path = NULL;
 }
@@ -1297,14 +1306,8 @@ void p101_env_set_call_observer(struct p101_env *env, p101_env_call_observer obs
         return;
     }
 
-    if(env->owned_call_log_stream != NULL)
-    {
-        p101_env_close_owned_call_log(env);
-    }
-
     env->call_observer      = observer;
     env->call_observer_data = user_data;
-    env->call_log_options   = P101_ENV_CALL_LOG_DEFAULT;
 }
 
 void p101_env_set_call_log(struct p101_env *env, FILE *stream, unsigned options)
@@ -1464,7 +1467,6 @@ void p101_env_set_fd_observer(struct p101_env *env, p101_env_fd_observer observe
 
     env->fd_observer      = observer;
     env->fd_observer_data = user_data;
-    p101_env_close_owned_resource_log_if_unused(env);
 }
 
 void p101_env_set_fd_log(struct p101_env *env, FILE *stream)
@@ -1480,11 +1482,13 @@ void p101_env_set_fd_log(struct p101_env *env, FILE *stream)
     {
         env->fd_observer      = NULL;
         env->fd_observer_data = NULL;
+        env->owned_fd_log_domains &= ~(unsigned)P101_RESOURCE_LOG_FD;
         p101_env_close_owned_resource_log_if_unused(env);
 
         return;
     }
 
+    env->owned_fd_log_domains &= ~(unsigned)P101_RESOURCE_LOG_FD;
     env->fd_observer      = p101_env_fd_log_observer;
     env->fd_observer_data = stream;
     p101_env_close_owned_resource_log_if_unused(env);
@@ -1502,7 +1506,6 @@ void p101_env_set_alloc_observer(struct p101_env *env, p101_env_alloc_observer o
 
     env->alloc_observer      = observer;
     env->alloc_observer_data = user_data;
-    p101_env_close_owned_resource_log_if_unused(env);
 }
 
 void p101_env_set_alloc_log(struct p101_env *env, FILE *stream)
@@ -1518,11 +1521,13 @@ void p101_env_set_alloc_log(struct p101_env *env, FILE *stream)
     {
         env->alloc_observer      = NULL;
         env->alloc_observer_data = NULL;
+        env->owned_fd_log_domains &= ~(unsigned)P101_RESOURCE_LOG_ALLOC;
         p101_env_close_owned_resource_log_if_unused(env);
 
         return;
     }
 
+    env->owned_fd_log_domains &= ~(unsigned)P101_RESOURCE_LOG_ALLOC;
     env->alloc_observer      = p101_env_alloc_log_observer;
     env->alloc_observer_data = stream;
     p101_env_close_owned_resource_log_if_unused(env);
@@ -1540,7 +1545,6 @@ void p101_env_set_resource_observer(struct p101_env *env, p101_env_resource_obse
 
     env->resource_observer      = observer;
     env->resource_observer_data = user_data;
-    p101_env_close_owned_resource_log_if_unused(env);
 }
 
 void p101_env_set_resource_log(struct p101_env *env, FILE *stream)
@@ -1556,10 +1560,12 @@ void p101_env_set_resource_log(struct p101_env *env, FILE *stream)
     {
         env->resource_observer      = NULL;
         env->resource_observer_data = NULL;
+        env->owned_fd_log_domains &= ~(unsigned)P101_RESOURCE_LOG_GENERIC;
         p101_env_close_owned_resource_log_if_unused(env);
         return;
     }
 
+    env->owned_fd_log_domains &= ~(unsigned)P101_RESOURCE_LOG_GENERIC;
     env->resource_observer      = p101_env_resource_log_observer;
     env->resource_observer_data = stream;
     p101_env_close_owned_resource_log_if_unused(env);
@@ -1673,8 +1679,8 @@ static size_t p101_env_stream_attempts(const struct p101_env *env, size_t stream
 
 void p101_env_complete_event_streams(const struct p101_env *env)
 {
-    FILE  *candidates[4];
-    FILE  *streams[4];
+    FILE  *candidates[P101_EVENT_STREAM_MAX];
+    FILE  *streams[P101_EVENT_STREAM_MAX];
     size_t candidate_count;
     size_t stream_count;
     long   pid;
@@ -1693,6 +1699,14 @@ void p101_env_complete_event_streams(const struct p101_env *env)
     }
 
     candidate_count = 0U;
+    if(env->owned_fd_log_stream != NULL)
+    {
+        candidates[candidate_count++] = env->owned_fd_log_stream;
+    }
+    if(env->owned_call_log_stream != NULL)
+    {
+        candidates[candidate_count++] = env->owned_call_log_stream;
+    }
     if(env->fd_observer == p101_env_fd_log_observer)
     {
         candidates[candidate_count++] = (FILE *)env->fd_observer_data;
@@ -1739,6 +1753,25 @@ void p101_env_complete_event_streams(const struct p101_env *env)
         size_t events_attempted;
 
         events_attempted = 0U;
+        if(env->owned_fd_log_stream == streams[stream])
+        {
+            if((env->owned_fd_log_domains & P101_RESOURCE_LOG_FD) != 0U)
+            {
+                events_attempted += p101_env_stream_attempts(env, 0U, pid);
+            }
+            if((env->owned_fd_log_domains & P101_RESOURCE_LOG_ALLOC) != 0U)
+            {
+                events_attempted += p101_env_stream_attempts(env, 1U, pid);
+            }
+            if((env->owned_fd_log_domains & P101_RESOURCE_LOG_GENERIC) != 0U)
+            {
+                events_attempted += p101_env_stream_attempts(env, 2U, pid);
+            }
+        }
+        if(env->owned_call_log_stream == streams[stream])
+        {
+            events_attempted += p101_env_stream_attempts(env, 3U, pid);
+        }
         if(env->fd_observer == p101_env_fd_log_observer && env->fd_observer_data == streams[stream])
         {
             events_attempted += p101_env_stream_attempts(env, 0U, pid);
@@ -2072,6 +2105,10 @@ static void p101_env_call_log_observer(const struct p101_env *env, p101_env_call
 
 static void p101_env_call_notify(const struct p101_env *env, p101_env_call_event event, const char *call_name, const char *arguments, const char *result, const char *file_name, const char *function_name, int line_number)
 {
+    if(env != NULL && env->owned_call_log_stream != NULL)
+    {
+        p101_env_call_log_observer(env, event, call_name, arguments, result, file_name, function_name, line_number, env->owned_call_log_stream);
+    }
     if(env != NULL && env->call_observer != NULL)
     {
         env->call_observer(env, event, call_name, arguments, result, file_name, function_name, line_number, env->call_observer_data);
@@ -2080,6 +2117,10 @@ static void p101_env_call_notify(const struct p101_env *env, p101_env_call_event
 
 static void p101_env_fd_notify(const struct p101_env *env, p101_env_fd_event event, int fd, const char *file_name, const char *function_name, int line_number)
 {
+    if(env != NULL && env->owned_fd_log_stream != NULL && (env->owned_fd_log_domains & P101_RESOURCE_LOG_FD) != 0U)
+    {
+        p101_env_fd_log_observer(env, event, fd, file_name, function_name, line_number, env->owned_fd_log_stream);
+    }
     if(env != NULL && env->fd_observer != NULL)
     {
         env->fd_observer(env, event, fd, file_name, function_name, line_number, env->fd_observer_data);
@@ -2088,6 +2129,10 @@ static void p101_env_fd_notify(const struct p101_env *env, p101_env_fd_event eve
 
 static void p101_env_alloc_notify(const struct p101_env *env, p101_env_alloc_event event, const void *ptr, const void *new_ptr, size_t size, const char *file_name, const char *function_name, int line_number)
 {
+    if(env != NULL && env->owned_fd_log_stream != NULL && (env->owned_fd_log_domains & P101_RESOURCE_LOG_ALLOC) != 0U)
+    {
+        p101_env_alloc_log_observer(env, event, ptr, new_ptr, size, file_name, function_name, line_number, env->owned_fd_log_stream);
+    }
     if(env != NULL && env->alloc_observer != NULL)
     {
         env->alloc_observer(env, event, ptr, new_ptr, size, file_name, function_name, line_number, env->alloc_observer_data);
@@ -2127,12 +2172,19 @@ void p101_env_track_realloc(const struct p101_env *env, const void *ptr, const v
 void p101_env_track_resource(const struct p101_env *env, p101_env_resource_kind event, const char *resource_class, const char *resource_id, const char *related_id, size_t size, const char *metadata, const char *file_name, const char *function_name,
                              int line_number)
 {
-    if(env == NULL || env->resource_observer == NULL || resource_class == NULL || resource_class[0] == '\0' || resource_id == NULL || resource_id[0] == '\0')
+    if(env == NULL || resource_class == NULL || resource_class[0] == '\0' || resource_id == NULL || resource_id[0] == '\0')
     {
         return;
     }
 
-    env->resource_observer(env, event, resource_class, resource_id, related_id, size, metadata, file_name, function_name, line_number, env->resource_observer_data);
+    if(env->owned_fd_log_stream != NULL && (env->owned_fd_log_domains & P101_RESOURCE_LOG_GENERIC) != 0U)
+    {
+        p101_env_resource_log_observer(env, event, resource_class, resource_id, related_id, size, metadata, file_name, function_name, line_number, env->owned_fd_log_stream);
+    }
+    if(env->resource_observer != NULL)
+    {
+        env->resource_observer(env, event, resource_class, resource_id, related_id, size, metadata, file_name, function_name, line_number, env->resource_observer_data);
+    }
 }
 
 void p101_env_pointer_resource_id(char *text, size_t text_size, const void *resource)
@@ -2257,6 +2309,8 @@ void p101_env_track_close(const struct p101_env *env, int fd, const char *file_n
 
 void p101_env_track_fork(const struct p101_env *env, long parent_pid, long child_pid, const char *file_name, const char *function_name, int line_number)
 {
+    FILE *configured_call_stream;
+    FILE *configured_resource_stream;
     FILE *call_stream;
     FILE *resource_stream;
 
@@ -2265,13 +2319,23 @@ void p101_env_track_fork(const struct p101_env *env, long parent_pid, long child
         return;
     }
 
-    resource_stream = env->fd_observer == p101_env_fd_log_observer ? (FILE *)env->fd_observer_data : NULL;
-    call_stream     = env->call_observer == p101_env_call_log_observer ? (FILE *)env->call_observer_data : NULL;
-    if(resource_stream != NULL)
+    configured_resource_stream = (env->owned_fd_log_domains & P101_RESOURCE_LOG_FD) != 0U ? env->owned_fd_log_stream : NULL;
+    configured_call_stream     = env->owned_call_log_stream;
+    resource_stream            = env->fd_observer == p101_env_fd_log_observer ? (FILE *)env->fd_observer_data : NULL;
+    call_stream                = env->call_observer == p101_env_call_log_observer ? (FILE *)env->call_observer_data : NULL;
+    if(configured_resource_stream != NULL)
+    {
+        p101_env_fork_log(env, configured_resource_stream, parent_pid, child_pid, file_name, function_name, line_number, 0U);
+    }
+    if(configured_call_stream != NULL && configured_call_stream != configured_resource_stream)
+    {
+        p101_env_fork_log(env, configured_call_stream, parent_pid, child_pid, file_name, function_name, line_number, 3U);
+    }
+    if(resource_stream != NULL && resource_stream != configured_resource_stream && resource_stream != configured_call_stream)
     {
         p101_env_fork_log(env, resource_stream, parent_pid, child_pid, file_name, function_name, line_number, 0U);
     }
-    if(call_stream != NULL && call_stream != resource_stream)
+    if(call_stream != NULL && call_stream != resource_stream && call_stream != configured_resource_stream && call_stream != configured_call_stream)
     {
         p101_env_fork_log(env, call_stream, parent_pid, child_pid, file_name, function_name, line_number, 3U);
     }
@@ -2279,20 +2343,30 @@ void p101_env_track_fork(const struct p101_env *env, long parent_pid, long child
 
 void p101_env_track_spawn(const struct p101_env *env, long parent_pid, long child_pid, const char *target, const char *file_name, const char *function_name, int line_number)
 {
-    FILE *stream;
+    FILE *configured_stream;
+    FILE *observer_stream;
 
-    if(env == NULL || parent_pid < 0 || child_pid < 0 || env->fd_observer != p101_env_fd_log_observer)
+    if(env == NULL || parent_pid < 0 || child_pid < 0)
     {
         return;
     }
 
-    stream = (FILE *)env->fd_observer_data;
-    p101_env_spawn_log(env, stream, parent_pid, child_pid, target, file_name, function_name, line_number);
+    configured_stream = (env->owned_fd_log_domains & P101_RESOURCE_LOG_FD) != 0U ? env->owned_fd_log_stream : NULL;
+    observer_stream   = env->fd_observer == p101_env_fd_log_observer ? (FILE *)env->fd_observer_data : NULL;
+    if(configured_stream != NULL)
+    {
+        p101_env_spawn_log(env, configured_stream, parent_pid, child_pid, target, file_name, function_name, line_number);
+    }
+    if(observer_stream != NULL && observer_stream != configured_stream)
+    {
+        p101_env_spawn_log(env, observer_stream, parent_pid, child_pid, target, file_name, function_name, line_number);
+    }
 }
 
 void p101_env_track_exec(const struct p101_env *env, const char *target, const char *file_name, const char *function_name, int line_number)
 {
-    FILE *stream;
+    FILE *configured_stream;
+    FILE *observer_stream;
     long  limit;
 
     if(env == NULL)
@@ -2304,13 +2378,14 @@ void p101_env_track_exec(const struct p101_env *env, const char *target, const c
      * Exec is a resource-log concept, not an OPEN/CLOSE observer event. Custom
      * fd observers keep their simple two-event contract.
      */
-    if(env->fd_observer != p101_env_fd_log_observer)
+    configured_stream = (env->owned_fd_log_domains & P101_RESOURCE_LOG_FD) != 0U ? env->owned_fd_log_stream : NULL;
+    observer_stream   = env->fd_observer == p101_env_fd_log_observer ? (FILE *)env->fd_observer_data : NULL;
+    if(configured_stream == NULL && observer_stream == NULL)
     {
         return;
     }
 
-    stream = (FILE *)env->fd_observer_data;
-    limit  = p101_env_exec_scan_limit();
+    limit = p101_env_exec_scan_limit();
 
     for(long fd = 0; fd < limit; fd++)
     {
@@ -2323,21 +2398,37 @@ void p101_env_track_exec(const struct p101_env *env, const char *target, const c
             continue;
         }
 
-        p101_env_exec_fd_log(env, stream, (int)fd, ((flags & FD_CLOEXEC) == FD_CLOEXEC) ? 1 : 0, target, file_name, function_name, line_number);
+        if(configured_stream != NULL)
+        {
+            p101_env_exec_fd_log(env, configured_stream, (int)fd, ((flags & FD_CLOEXEC) == FD_CLOEXEC) ? 1 : 0, target, file_name, function_name, line_number);
+        }
+        if(observer_stream != NULL && observer_stream != configured_stream)
+        {
+            p101_env_exec_fd_log(env, observer_stream, (int)fd, ((flags & FD_CLOEXEC) == FD_CLOEXEC) ? 1 : 0, target, file_name, function_name, line_number);
+        }
     }
 }
 
 void p101_env_track_exec_failure(const struct p101_env *env, const char *target, const char *file_name, const char *function_name, int line_number)
 {
-    FILE *stream;
+    FILE *configured_stream;
+    FILE *observer_stream;
 
-    if(env == NULL || env->fd_observer != p101_env_fd_log_observer)
+    if(env == NULL)
     {
         return;
     }
 
-    stream = (FILE *)env->fd_observer_data;
-    p101_env_exec_failure_log(env, stream, target, file_name, function_name, line_number);
+    configured_stream = (env->owned_fd_log_domains & P101_RESOURCE_LOG_FD) != 0U ? env->owned_fd_log_stream : NULL;
+    observer_stream   = env->fd_observer == p101_env_fd_log_observer ? (FILE *)env->fd_observer_data : NULL;
+    if(configured_stream != NULL)
+    {
+        p101_env_exec_failure_log(env, configured_stream, target, file_name, function_name, line_number);
+    }
+    if(observer_stream != NULL && observer_stream != configured_stream)
+    {
+        p101_env_exec_failure_log(env, observer_stream, target, file_name, function_name, line_number);
+    }
 }
 
 size_t p101_env_report_leaks(const struct p101_env *env)

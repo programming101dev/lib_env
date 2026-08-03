@@ -42,6 +42,19 @@ static void ignore_fd_event(const struct p101_env *env, p101_env_fd_event event,
     (void)user_data;
 }
 
+static void ignore_call_event(const struct p101_env *env, p101_env_call_event event, const char *call_name, const char *arguments, const char *result, const char *file_name, const char *function_name, int line_number, void *user_data)
+{
+    (void)env;
+    (void)event;
+    (void)call_name;
+    (void)arguments;
+    (void)result;
+    (void)file_name;
+    (void)function_name;
+    (void)line_number;
+    (void)user_data;
+}
+
 static void make_path(char path[], size_t path_size, const char *suffix)
 {
     snprintf(path, path_size, "/tmp/p101-env-test-%ld-%s.log", (long)getpid(), suffix);
@@ -484,6 +497,71 @@ static void test_observers_remain_independent(void)
     remove(path);
 }
 
+static void test_configured_logs_survive_application_observers(void)
+{
+    struct p101_error *err;
+    struct p101_env   *env;
+    FILE              *stream;
+    char               line[2048];
+    char               call_path[256];
+    char               resource_path[256];
+    int                call_record;
+    int                resource_record;
+
+    make_path(call_path, sizeof(call_path), "observer-call-fanout");
+    make_path(resource_path, sizeof(resource_path), "observer-resource-fanout");
+    EXPECT(setenv("P101_CALL_LOG", call_path, 1) == 0);
+    EXPECT(setenv("P101_RESOURCE_LOG", resource_path, 1) == 0);
+    err = p101_error_create(false);
+    env = p101_env_create(err, NULL);
+    EXPECT(unsetenv("P101_CALL_LOG") == 0);
+    EXPECT(unsetenv("P101_RESOURCE_LOG") == 0);
+    EXPECT(err != NULL);
+    EXPECT(env != NULL);
+
+    p101_env_set_call_observer(env, ignore_call_event, NULL);
+    p101_env_set_fd_observer(env, ignore_fd_event, NULL);
+    p101_env_trace_call(env, "application_call", NULL, __FILE__, __func__, __LINE__);
+    p101_env_trace_call_exit(env, "application_call", NULL, __FILE__, __func__, __LINE__);
+    p101_env_track_open(env, 23, __FILE__, __func__, __LINE__);
+    p101_env_destroy(env);
+    p101_error_destroy(err);
+
+    call_record = 0;
+    stream      = fopen(call_path, "r");
+    EXPECT(stream != NULL);
+    if(stream != NULL)
+    {
+        while(fgets(line, sizeof(line), stream) != NULL)
+        {
+            if(strstr(line, "\tapplication_call\t") != NULL)
+            {
+                call_record++;
+            }
+        }
+        fclose(stream);
+    }
+    EXPECT(call_record == 2);
+
+    resource_record = 0;
+    stream          = fopen(resource_path, "r");
+    EXPECT(stream != NULL);
+    if(stream != NULL)
+    {
+        while(fgets(line, sizeof(line), stream) != NULL)
+        {
+            if(strncmp(line, "P101FD\t5\t", strlen("P101FD\t5\t")) == 0)
+            {
+                resource_record++;
+            }
+        }
+        fclose(stream);
+    }
+    EXPECT(resource_record == 1);
+    remove(call_path);
+    remove(resource_path);
+}
+
 static void test_event_run_identity(void)
 {
     struct p101_error            *err;
@@ -663,6 +741,7 @@ int main(void)
     test_uncertain_fault_action_describes_hidden_outcome();
     test_dup_keeps_owned_destination();
     test_observers_remain_independent();
+    test_configured_logs_survive_application_observers();
     test_event_run_identity();
     test_distinct_manual_streams_receive_completion();
     test_dup_keeps_fault_configuration();
