@@ -43,6 +43,10 @@
 *.su
 *.idb
 *.pdb
+*.gcno
+*.gcda
+*.gcov
+coverage.info
 
 # Kernel Module Compile Results
 *.mod*
@@ -72,14 +76,7 @@ build/
 build-*/
 
 ### JetBrains / CLion ###
-# Ignore everything under .idea except shared settings
-.idea/*
-!.idea/codeStyles/
-!.idea/runConfigurations/
-
-# (Optional) if you also share inspection profiles, uncomment:
-# !.idea/inspectionProfiles/
-
+.idea/
 *.iws
 out/
 .idea_modules/
@@ -179,14 +176,16 @@ server
 supported_c_compilers.txt
 supported_cxx_compilers.txt
 sanitizers.txt
+compiler_paths.txt
+compiler-discovery.log
 
 .flags
-cmake-build-*/
-build/
-build-*/
+.compiler-links/
+.p101-script-backups/
 
 .last-build-dir
 .last-runtime-build-dir
+
 ### Programming 101 transient (build/test/fuzz/debug output) ###
 test/build/
 test/build-*/
@@ -197,6 +196,10 @@ debug/
 debug-*/
 coverage/
 coverage-*/
+**/coverage_report/
 profile/
 profile-*/
+flag_report/
+toolchain-report/
+**/*.xcodeproj/
 # NOTE: fuzz/corpus/ is the committed seed corpus — keep it.
