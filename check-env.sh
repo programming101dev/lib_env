@@ -4,6 +4,7 @@
 set -e
 
 c_compiler=""
+cxx_compiler=""
 clang_format_name="clang-format"
 clang_tidy_name="clang-tidy"
 cppcheck_name="cppcheck"
@@ -12,6 +13,7 @@ usage()
 {
     echo "Usage: $0 -c <C compiler> -x <C++ compiler> [-f <clang-format>] [-t <clang-tidy>] [-k <cppcheck>]"
     echo "  -c c compiler     Specify the c compiler name (e.g. gcc or clang)"
+    echo "  -x c++ compiler   Optionally verify a c++ compiler (e.g. g++ or clang++)"
     echo "  -f clang-format   Specify the clang-format name (e.g. clang-tidy or clang-tidy-17)"
     echo "  -t clang-tidy     Specify the clang-tidy name (e.g. clang-tidy or clang-tidy-17)"
     echo "  -k cppcheck       Specify the cppcheck name (e.g. cppcheck)"
@@ -22,10 +24,13 @@ usage()
 case " $* " in *" --help "*|*" -h "*) ( usage ) || true; exit 0 ;; esac
 
 # Parse command-line options using getopt
-while getopts ":c:f:t:k:" opt; do
+while getopts ":c:x:f:t:k:" opt; do
   case $opt in
     c)
       c_compiler="$OPTARG"
+      ;;
+    x)
+      cxx_compiler="$OPTARG"
       ;;
     f)
       clang_format_name="$OPTARG"
@@ -66,6 +71,9 @@ check_tool() {
 
 # List of tools to check
 tools=("cmake" "$c_compiler" "$clang_format_name" "$clang_tidy_name" "$cppcheck_name")
+if [ -n "$cxx_compiler" ]; then
+    tools+=("$cxx_compiler")
+fi
 
 # Initialize a counter for missing tools
 missing_count=0

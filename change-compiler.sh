@@ -197,7 +197,12 @@ cmake "${cmake_args[@]}"
 
 # Only publish a build directory after CMake configured it successfully.
 printf '%s\n' "$build_dir" > .last-build-dir
-if [[ "${P101_COVERAGE:-0}" != "1" && "${P101_PROFILE:-0}" != "1" ]]; then
+# Runtime artifacts must be safe to load into a consumer built by a different
+# compiler.  Sanitized libraries carry a compiler-private runtime and therefore
+# are quality-build artifacts, not installable runtime artifacts.
+if [[ "${P101_COVERAGE:-0}" != "1" &&
+      "${P101_PROFILE:-0}" != "1" &&
+      -z "$sanitizers" ]]; then
   printf '%s\n' "$build_dir" > .last-runtime-build-dir
 fi
 

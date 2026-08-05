@@ -43,6 +43,7 @@ struct p101_fd_record
 struct p101_fd_ledger
 {
     struct p101_fd_record *head;
+    atomic_flag            lock;
 };
 
 struct p101_env_fault_state
@@ -172,10 +173,23 @@ static void                          p101_env_resource_log_observer(const struct
 static void                          p101_env_call_notify(const struct p101_env *env, p101_env_call_event event, const char *call_name, const char *arguments, const char *result, const char *file_name, const char *function_name, int line_number);
 static void p101_env_call_log_observer(const struct p101_env *env, p101_env_call_event event, const char *call_name, const char *arguments, const char *result, const char *file_name, const char *function_name, int line_number, void *user_data);
 
-static atomic_ullong p101_env_next_context_id = 0;                                      // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
-static atomic_ullong p101_env_run_generation  = 0;                                      // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
-static atomic_flag   p101_env_run_id_lock     = ATOMIC_FLAG_INIT;                       // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
-static char          p101_env_process_run_id[P101_TOOL_EVENT_RUN_ID_MAX_BYTES + 1U];    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
+static atomic_ullong p101_env_next_context_id = 0;                   // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
+static atomic_ullong p101_env_run_generation  = 0;                   // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
+static atomic_flag   p101_env_run_id_lock     = ATOMIC_FLAG_INIT;    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
+
+static void p101_fd_ledger_lock(struct p101_fd_ledger *ledger)
+{
+    while(atomic_flag_test_and_set_explicit(&ledger->lock, memory_order_acquire))
+    {
+    }
+}
+
+static void p101_fd_ledger_unlock(struct p101_fd_ledger *ledger)
+{
+    atomic_flag_clear_explicit(&ledger->lock, memory_order_release);
+}
+
+static char p101_env_process_run_id[P101_TOOL_EVENT_RUN_ID_MAX_BYTES + 1U];    // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 
 struct p101_env *p101_env_create(struct p101_error *err, p101_env_tracer tracer)
 {
@@ -334,8 +348,12 @@ void p101_env_destroy(struct p101_env *env)
 
     if(env != NULL && env->fd_ledger != NULL)
     {
-        struct p101_fd_record *cur = env->fd_ledger->head;
+        struct p101_fd_record *cur;
 
+        p101_fd_ledger_lock(env->fd_ledger);
+        cur                  = env->fd_ledger->head;
+        env->fd_ledger->head = NULL;
+        p101_fd_ledger_unlock(env->fd_ledger);
         while(cur != NULL)
         {
             struct p101_fd_record *next = cur->next;
@@ -1585,7 +1603,8 @@ void p101_env_enable_fd_tracking(struct p101_env *env, struct p101_error *err)
         goto p101_single_exit_;
     }
 
-    ledger->head   = NULL;
+    ledger->head = NULL;
+    atomic_flag_clear(&ledger->lock);
     env->fd_ledger = ledger;
 
 p101_single_exit_:
@@ -2435,12 +2454,14 @@ void p101_env_track_open(const struct p101_env *env, int fd, const char *file_na
         goto p101_single_exit_;
     }
 
-    rec->fd              = fd;
-    rec->file_name       = file_name;
-    rec->function_name   = function_name;
-    rec->line_number     = line_number;
+    rec->fd            = fd;
+    rec->file_name     = file_name;
+    rec->function_name = function_name;
+    rec->line_number   = line_number;
+    p101_fd_ledger_lock(env->fd_ledger);
     rec->next            = env->fd_ledger->head;
     env->fd_ledger->head = rec;
+    p101_fd_ledger_unlock(env->fd_ledger);
 
 p101_single_exit_:
     return;
@@ -2465,6 +2486,7 @@ void p101_env_track_close(const struct p101_env *env, int fd, const char *file_n
         goto p101_single_exit_;
     }
 
+    p101_fd_ledger_lock(env->fd_ledger);
     pp = &env->fd_ledger->head;
 
     while(*pp != NULL)
@@ -2476,11 +2498,13 @@ void p101_env_track_close(const struct p101_env *env, int fd, const char *file_n
             *pp = dead->next;
             free(dead);
 
+            p101_fd_ledger_unlock(env->fd_ledger);
             goto p101_single_exit_;
         }
 
         pp = &(*pp)->next;
     }
+    p101_fd_ledger_unlock(env->fd_ledger);
 
 p101_single_exit_:
     return;
@@ -2626,7 +2650,8 @@ size_t p101_env_report_leaks(const struct p101_env *env)
     }
 
     count = 0;
-    cur   = env->fd_ledger->head;
+    p101_fd_ledger_lock(env->fd_ledger);
+    cur = env->fd_ledger->head;
 
     while(cur != NULL)
     {
@@ -2640,6 +2665,7 @@ size_t p101_env_report_leaks(const struct p101_env *env)
         count++;
         cur = cur->next;
     }
+    p101_fd_ledger_unlock(env->fd_ledger);
 
     p101_single_result_ = count;
     goto p101_single_exit_;

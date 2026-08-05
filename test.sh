@@ -35,22 +35,47 @@ if [ "$lang" = "CXX" ] || [ "$lang" = "CPP" ]; then
   requested_compiler="${P101_TEST_CXX:-}"
 fi
 
-p101_find_compiler_build() {
-  local requested="$1" cache_key="$2" marker candidate cached
+p101_compiler_identity() {
+  local path="$1"
+  local target
+  local directory
 
-  for marker in .last-runtime-build-dir .last-build-dir; do
+  case "$path" in
+    */*) ;;
+    *) path="$(command -v "$path" 2>/dev/null || printf '%s' "$path")" ;;
+  esac
+  while [ -L "$path" ]; do
+    target="$(readlink "$path")"
+    case "$target" in
+      /*) path="$target" ;;
+      *) path="$(dirname "$path")/$target" ;;
+    esac
+  done
+  directory="$(CDPATH='' cd -P -- "$(dirname "$path")" 2>/dev/null && pwd -P)" \
+    || { printf '%s' "$1"; return; }
+  printf '%s/%s' "$directory" "$(basename "$path")"
+}
+
+p101_find_compiler_build() {
+  local requested="$1" cache_key="$2" marker candidate cached requested_identity
+
+  requested_identity="$(p101_compiler_identity "$requested")"
+
+  for marker in .last-build-dir .last-runtime-build-dir; do
     if [ -f "$marker" ]; then
       candidate="$(cat "$marker")"
       if [ -f "$candidate/CMakeCache.txt" ]; then
         cached="$(sed -n "s/^${cache_key}:[^=]*=//p" "$candidate/CMakeCache.txt" | head -1)"
-        [ "$cached" != "$requested" ] || { printf '%s' "$candidate"; return 0; }
+        [ "$(p101_compiler_identity "$cached")" != "$requested_identity" ] \
+          || { printf '%s' "$candidate"; return 0; }
       fi
     fi
   done
   for candidate in build-*; do
     [ -f "$candidate/CMakeCache.txt" ] || continue
     cached="$(sed -n "s/^${cache_key}:[^=]*=//p" "$candidate/CMakeCache.txt" | head -1)"
-    [ "$cached" != "$requested" ] || { printf '%s' "$candidate"; return 0; }
+    [ "$(p101_compiler_identity "$cached")" != "$requested_identity" ] \
+      || { printf '%s' "$candidate"; return 0; }
   done
   return 1
 }
@@ -65,10 +90,10 @@ if [ -n "$requested_compiler" ]; then
     echo "No configured main build uses requested compiler '$requested_compiler'." >&2
     exit 1
   }
-elif [ -f .last-runtime-build-dir ]; then
-  main_bd="$(cat .last-runtime-build-dir)"
 elif [ -f .last-build-dir ]; then
   main_bd="$(cat .last-build-dir)"
+elif [ -f .last-runtime-build-dir ]; then
+  main_bd="$(cat .last-runtime-build-dir)"
 fi
 [ -f "$main_bd/CMakeCache.txt" ] || { echo "No configured main build ('$main_bd'). Run ./change-compiler.sh first." >&2; exit 1; }
 

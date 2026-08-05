@@ -21,6 +21,12 @@ struct concurrent_writer
     size_t           thread_number;
 };
 
+struct concurrent_fd_writer
+{
+    struct p101_env *env;
+    size_t           thread_number;
+};
+
 #define EXPECT(condition)                                                                                                                                                                                                                                          \
     do                                                                                                                                                                                                                                                             \
     {                                                                                                                                                                                                                                                              \
@@ -53,6 +59,55 @@ static void ignore_call_event(const struct p101_env *env, p101_env_call_event ev
     (void)function_name;
     (void)line_number;
     (void)user_data;
+}
+
+static void *write_concurrent_fd_events(void *arg)
+{
+    struct concurrent_fd_writer *writer;
+
+    writer = (struct concurrent_fd_writer *)arg;
+    for(size_t index = 0U; index < CONCURRENT_EVENTS_PER_THREAD; index++)
+    {
+        int fd;
+
+        fd = (int)(writer->thread_number * CONCURRENT_EVENTS_PER_THREAD + index + 100U);
+        p101_env_track_open(writer->env, fd, "concurrent.c", "worker", (int)index);
+        p101_env_track_close(writer->env, fd, "concurrent.c", "worker", (int)index);
+    }
+    return NULL;
+}
+
+static void test_concurrent_fd_ledger(void)
+{
+    struct p101_error          *err;
+    struct p101_env            *env;
+    struct concurrent_fd_writer writers[CONCURRENT_THREAD_COUNT];
+    pthread_t                   threads[CONCURRENT_THREAD_COUNT];
+
+    err = p101_error_create(false);
+    env = p101_env_create(err, NULL);
+    EXPECT(err != NULL);
+    EXPECT(env != NULL);
+    if(env == NULL)
+    {
+        p101_error_destroy(err);
+        return;
+    }
+    p101_env_enable_fd_tracking(env, err);
+    EXPECT(!p101_error_has_error(err));
+    for(size_t index = 0U; index < CONCURRENT_THREAD_COUNT; index++)
+    {
+        writers[index].env           = env;
+        writers[index].thread_number = index;
+        EXPECT(pthread_create(&threads[index], NULL, write_concurrent_fd_events, &writers[index]) == 0);
+    }
+    for(size_t index = 0U; index < CONCURRENT_THREAD_COUNT; index++)
+    {
+        EXPECT(pthread_join(threads[index], NULL) == 0);
+    }
+    EXPECT(p101_env_report_leaks(env) == 0U);
+    p101_env_destroy(env);
+    p101_error_destroy(err);
 }
 
 static void make_path(char path[], size_t path_size, const char *suffix)
@@ -737,6 +792,7 @@ int main(void)
     test_event_write_failure_is_sticky();
     test_scope_trace_pairs_entry_and_exit();
     test_concurrent_event_sequences();
+    test_concurrent_fd_ledger();
     test_short_fault_action_repeats();
     test_uncertain_fault_action_describes_hidden_outcome();
     test_dup_keeps_owned_destination();

@@ -16,7 +16,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
     struct p101_tool_event_record record;
     p101_tool_event_parse_status  status;
-    char                        *line;
+    char                         *line;
 
     if(size > 65536U)
     {
