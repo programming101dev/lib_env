@@ -179,9 +179,12 @@ static atomic_flag   p101_env_run_id_lock     = ATOMIC_FLAG_INIT;    // NOLINT(c
 
 static void p101_fd_ledger_lock(struct p101_fd_ledger *ledger)
 {
-    while(atomic_flag_test_and_set_explicit(&ledger->lock, memory_order_acquire))
+    bool was_locked;
+
+    do
     {
-    }
+        was_locked = atomic_flag_test_and_set_explicit(&ledger->lock, memory_order_acquire);
+    } while(was_locked);
 }
 
 static void p101_fd_ledger_unlock(struct p101_fd_ledger *ledger)
@@ -472,6 +475,7 @@ p101_single_exit_:
 static int p101_env_initialize_run_id(struct p101_error *err, char run_id[P101_TOOL_EVENT_RUN_ID_MAX_BYTES + 1U])
 {
     int         p101_single_result_;
+    bool        was_locked;
     const char *configured;
 
     configured = getenv(P101_ENV_EVENT_RUN_ID_ENV);
@@ -491,9 +495,10 @@ static int p101_env_initialize_run_id(struct p101_error *err, char run_id[P101_T
         goto p101_single_exit_;
     }
 
-    while(atomic_flag_test_and_set_explicit(&p101_env_run_id_lock, memory_order_acquire))
+    do
     {
-    }
+        was_locked = atomic_flag_test_and_set_explicit(&p101_env_run_id_lock, memory_order_acquire);
+    } while(was_locked);
     if(p101_env_process_run_id[0] == '\0')
     {
         struct timespec    now;
@@ -1891,9 +1896,12 @@ static void p101_env_lock_event_emission(const struct p101_env *env)
 {
     if(env != NULL && env->event_state != NULL)
     {
-        while(atomic_flag_test_and_set_explicit(&env->event_state->emission_lock, memory_order_acquire))
+        bool was_locked;
+
+        do
         {
-        }
+            was_locked = atomic_flag_test_and_set_explicit(&env->event_state->emission_lock, memory_order_acquire);
+        } while(was_locked);
     }
 }
 
