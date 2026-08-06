@@ -109,10 +109,10 @@ Fault injection:
 
 ```sh
 P101_FAULT_CALL=3 ./program
-P101_FAULT_CALL=2 P101_FAULT_ERRNO=5 P101_FAULT_NAME=open ./program
+P101_FAULT_CALL=2 P101_FAULT_ERRNO=5 P101_FAULT_NAME=p101_open ./program
 P101_FAULT_CALL=2 P101_FAULT_LOG=fault.log ./program
-P101_FAULT_CALL=2 P101_FAULT_NAME=read P101_FAULT_MODE=short P101_FAULT_AMOUNT=4 ./program
-P101_FAULT_CALL=2 P101_FAULT_NAME=write P101_FAULT_MODE=uncertain ./program
+P101_FAULT_CALL=2 P101_FAULT_NAME=p101_read P101_FAULT_MODE=short P101_FAULT_AMOUNT=4 ./program
+P101_FAULT_CALL=2 P101_FAULT_NAME=p101_write P101_FAULT_MODE=uncertain ./program
 P101_FAULT_CALL=2 P101_FAULT_MODE=eintr P101_FAULT_REPEAT=3 ./program
 ```
 
@@ -120,11 +120,11 @@ P101_FAULT_CALL=2 P101_FAULT_MODE=eintr P101_FAULT_REPEAT=3 ./program
   fault-capable p101 wrapper call.
 - `P101_FAULT_ERRNO=E` chooses the errno reported by the failed wrapper. The
   default is `EIO`.
-- `P101_FAULT_NAME=name` optionally narrows counting to one wrapper name, such
-  as `open`, `read`, or `socket`.
+- `P101_FAULT_NAME=name` optionally narrows counting to one exact public
+  wrapper identity, such as `p101_open`, `p101_read`, or `p101_socket`.
 - `P101_FAULT_MODE=error|eintr|timeout|short|uncertain` selects a hard failure, an
   `EINTR` failure, a timeout-style failure, or a successful short I/O. Short
-  and uncertain modes are currently implemented by `read`, `write`, `pread`,
+  and uncertain modes are currently implemented by `p101_read`, `p101_write`, `p101_pread`,
   and `pwrite`. Uncertain mode performs the real operation but hides its
   success with `ETIMEDOUT`, so callers must not assume an automatic retry is
   safe.

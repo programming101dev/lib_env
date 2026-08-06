@@ -1,49 +1,39 @@
 # lib_env is below lib_c and lib_posix in the dependency graph. These exact
 # file boundaries avoid an upward dependency cycle.
-src/env.c:*:clock_gettime
-src/env.c:*:atomic_flag_clear
-src/env.c:*:atomic_flag_clear_explicit
-src/env.c:*:atomic_flag_test_and_set_explicit
-src/env.c:*:atomic_compare_exchange_strong_explicit
-src/env.c:*:atomic_exchange_explicit
-src/env.c:*:atomic_fetch_add_explicit
-src/env.c:*:atomic_load_explicit
-src/env.c:*:atomic_store_explicit
-src/env.c:*:fclose
-src/env.c:*:fcntl
-src/env.c:*:fflush
-src/env.c:*:fopen
-src/env.c:*:fprintf
-src/env.c:p101_env_destroy:flockfile
-src/env.c:p101_env_destroy:funlockfile
-src/env.c:*:free
-src/env.c:*:getenv
-src/env.c:*:getpid
-src/env.c:*:getrlimit
-src/env.c:*:malloc
-src/env.c:*:memcpy
-src/env.c:*:memset
-src/env.c:*:setvbuf
-src/env.c:*:snprintf
-src/env.c:*:strcmp
-src/env.c:*:strlen
-src/env.c:*:strtoul
-src/env.c:*:sysconf
+src/env.c		c:@F@atomic_flag_clear
+src/env.c		c:@F@atomic_flag_clear_explicit
+src/env.c		c:@F@atomic_flag_test_and_set_explicit
+src/env.c		c:@F@clock_gettime
+src/env.c		c:@F@fclose
+src/env.c		c:@F@fcntl
+src/env.c		c:@F@fflush
+src/env.c		c:@F@fopen
+src/env.c		c:@F@fprintf
+src/env.c		c:@F@flockfile
+src/env.c		c:@F@funlockfile
+src/env.c		c:@F@free
+src/env.c		c:@F@getenv
+src/env.c		c:@F@getpid
+src/env.c		c:@F@getrlimit
+src/env.c		c:@F@malloc
+src/env.c		c:@F@memcpy
+src/env.c		c:@F@memset
+src/env.c		c:@F@setvbuf
+src/env.c		c:@F@snprintf
+src/env.c		c:@F@strcmp
+src/env.c		c:@F@strlen
+src/env.c		c:@F@strtoul
+src/env.c		c:@F@sysconf
 # Run identity is initialized while lib_env itself is being constructed.
 # Calling p101_timespec_get here would recurse upward through lib_c into the
 # environment whose identity does not yet exist.
-src/env.c:p101_env_initialize_run_id:timespec_get
-src/env.c:p101_env_log_fault_hit:flockfile
-src/env.c:p101_env_log_fault_hit:funlockfile
+src/env.c		c:@F@timespec_get
 # User-supplied observer and tracer callbacks are intentional indirect-call
-# boundaries, not wrapper bypasses.
-src/env.c:p101_env_alloc_notify:alloc_observer
-src/env.c:p101_env_call_notify:call_observer
-src/env.c:p101_env_check_fault:fault_injector
-src/env.c:p101_env_check_fault_action:fault_injector
-src/env.c:p101_env_fd_notify:fd_observer
-src/env.c:p101_env_trace:tracer
-src/env.c:p101_env_trace_call:tracer
-src/env.c:p101_env_trace_call_exit:exit_tracer
-src/env.c:p101_env_trace_exit:exit_tracer
-src/env.c:p101_env_track_resource:resource_observer
+# boundaries, not wrapper bypasses. Typedef USRs are normalized semantically so
+# these rules do not depend on the header path embedded by libclang.
+src/env.c		c:@T@p101_env_alloc_observer
+src/env.c		c:@T@p101_env_call_observer
+src/env.c		c:@T@p101_env_fault_injector
+src/env.c		c:@T@p101_env_fd_observer
+src/env.c		c:@T@p101_env_tracer
+src/env.c		c:@T@p101_env_resource_observer

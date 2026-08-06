@@ -65,16 +65,16 @@ extern "C"
         const char            *file_name;
         const char            *function_name;
         int                    line_number;
-    } p101_env_trace_scope;
+    } p101_env_trace_scope P101_ATTR_SEMANTIC_ROLE("p101:trace-scope");
 
-    struct p101_env *p101_env_create(struct p101_error *err, p101_env_tracer tracer) P101_ATTR_MALLOC P101_ATTR_WARN_UNUSED_RESULT;
+    struct p101_env *p101_env_create(struct p101_error *err, p101_env_tracer tracer) P101_ATTR_MALLOC P101_ATTR_WARN_UNUSED_RESULT P101_ATTR_SEMANTIC_ROLE("p101:ownership:env:acquire");
     struct p101_env *p101_env_dup(struct p101_error *err, const struct p101_env *env) P101_ATTR_MALLOC P101_ATTR_WARN_UNUSED_RESULT;
-    void             p101_env_destroy(struct p101_env *env);
+    void             p101_env_destroy(struct p101_env *env) P101_ATTR_SEMANTIC_ROLE("p101:ownership:env:release");
     p101_env_tracer  p101_env_get_tracer(const struct p101_env *env);
     void             p101_env_set_tracer(struct p101_env *env, p101_env_tracer tracer);
     void             p101_env_default_tracer(const struct p101_env *env, const char *file_name, const char *function_name, int line_number);
-    void             p101_env_trace(const struct p101_env *env, const char *file_name, const char *function_name, int line_number);
-    void             p101_env_trace_scope_cleanup(p101_env_trace_scope *scope);
+    void             p101_env_trace(const struct p101_env *env, const char *file_name, const char *function_name, int line_number) P101_ATTR_SEMANTIC_ROLE("p101:instrumentation:trace-entry");
+    void             p101_env_trace_scope_cleanup(p101_env_trace_scope *scope) P101_ATTR_SEMANTIC_ROLE("p101:instrumentation:trace-exit");
 
     /* State for the INSTALLED TRACER only (call depth, an output stream, a
      * filter...) -- not a general-purpose stash for application data. The
@@ -89,7 +89,7 @@ extern "C"
      * _Exit, abort, or process termination. */
     void            p101_env_set_exit_tracer(struct p101_env *env, p101_env_tracer tracer);
     p101_env_tracer p101_env_get_exit_tracer(const struct p101_env *env);
-    void            p101_env_trace_exit(const struct p101_env *env, const char *file_name, const char *function_name, int line_number);
+    void            p101_env_trace_exit(const struct p101_env *env, const char *file_name, const char *function_name, int line_number) P101_ATTR_SEMANTIC_ROLE("p101:instrumentation:trace-exit");
 
     /*
      * Structured call observation. This is the strace/ltrace-ish layer for p101
@@ -202,8 +202,8 @@ extern "C"
     };
 
     void p101_env_set_fault_injector(struct p101_env *env, p101_env_fault_injector injector, void *user_data);
-    int  p101_env_check_fault(const struct p101_env *env, const char *call_name);
-    int  p101_env_check_fault_action(const struct p101_env *env, const char *call_name, struct p101_env_fault_action *action);
+    int  p101_env_check_fault(const struct p101_env *env, const char *call_name) P101_ATTR_SEMANTIC_ROLE("p101:instrumentation:fault");
+    int  p101_env_check_fault_action(const struct p101_env *env, const char *call_name, struct p101_env_fault_action *action) P101_ATTR_SEMANTIC_ROLE("p101:instrumentation:fault");
     void p101_env_record_fault_action(const struct p101_env *env, const char *call_name, const struct p101_env_fault_action *action);
 
     /*
@@ -223,8 +223,8 @@ extern "C"
      * recording the replacement.
      */
     void   p101_env_enable_fd_tracking(struct p101_env *env, struct p101_error *err);
-    void   p101_env_track_open(const struct p101_env *env, int fd, const char *file_name, const char *function_name, int line_number);
-    void   p101_env_track_close(const struct p101_env *env, int fd, const char *file_name, const char *function_name, int line_number);
+    void   p101_env_track_open(const struct p101_env *env, int fd, const char *file_name, const char *function_name, int line_number) P101_ATTR_SEMANTIC_ROLE("p101:instrumentation:fd");
+    void   p101_env_track_close(const struct p101_env *env, int fd, const char *file_name, const char *function_name, int line_number) P101_ATTR_SEMANTIC_ROLE("p101:instrumentation:fd");
     size_t p101_env_report_leaks(const struct p101_env *env);
 
     /*
@@ -292,10 +292,10 @@ extern "C"
      * before closing the stream yourself.
      */
     void p101_env_set_fd_log(struct p101_env *env, FILE *stream);
-    void p101_env_track_fork(const struct p101_env *env, long parent_pid, long child_pid, const char *file_name, const char *function_name, int line_number);
-    void p101_env_track_spawn(const struct p101_env *env, long parent_pid, long child_pid, const char *target, const char *file_name, const char *function_name, int line_number);
-    void p101_env_track_exec(const struct p101_env *env, const char *target, const char *file_name, const char *function_name, int line_number);
-    void p101_env_track_exec_failure(const struct p101_env *env, const char *target, const char *file_name, const char *function_name, int line_number);
+    void p101_env_track_fork(const struct p101_env *env, long parent_pid, long child_pid, const char *file_name, const char *function_name, int line_number) P101_ATTR_SEMANTIC_ROLE("p101:instrumentation:fd");
+    void p101_env_track_spawn(const struct p101_env *env, long parent_pid, long child_pid, const char *target, const char *file_name, const char *function_name, int line_number) P101_ATTR_SEMANTIC_ROLE("p101:instrumentation:fd");
+    void p101_env_track_exec(const struct p101_env *env, const char *target, const char *file_name, const char *function_name, int line_number) P101_ATTR_SEMANTIC_ROLE("p101:instrumentation:fd");
+    void p101_env_track_exec_failure(const struct p101_env *env, const char *target, const char *file_name, const char *function_name, int line_number) P101_ATTR_SEMANTIC_ROLE("p101:instrumentation:fd");
 
     /*
      * Allocation event observer. Like the fd observer, this is best-effort
@@ -313,9 +313,9 @@ extern "C"
 
     void p101_env_set_alloc_observer(struct p101_env *env, p101_env_alloc_observer observer, void *user_data);
     void p101_env_set_alloc_log(struct p101_env *env, FILE *stream);
-    void p101_env_track_alloc(const struct p101_env *env, const void *ptr, size_t size, const char *file_name, const char *function_name, int line_number);
-    void p101_env_track_free(const struct p101_env *env, const void *ptr, const char *file_name, const char *function_name, int line_number);
-    void p101_env_track_realloc(const struct p101_env *env, const void *ptr, const void *new_ptr, size_t size, const char *file_name, const char *function_name, int line_number);
+    void p101_env_track_alloc(const struct p101_env *env, const void *ptr, size_t size, const char *file_name, const char *function_name, int line_number) P101_ATTR_SEMANTIC_ROLE("p101:instrumentation:allocation");
+    void p101_env_track_free(const struct p101_env *env, const void *ptr, const char *file_name, const char *function_name, int line_number) P101_ATTR_SEMANTIC_ROLE("p101:instrumentation:allocation");
+    void p101_env_track_realloc(const struct p101_env *env, const void *ptr, const void *new_ptr, size_t size, const char *file_name, const char *function_name, int line_number) P101_ATTR_SEMANTIC_ROLE("p101:instrumentation:allocation");
 
     /*
      * Generic non-FD/non-heap resource lifecycle events. Resource classes and
@@ -337,12 +337,12 @@ extern "C"
     void p101_env_set_resource_observer(struct p101_env *env, p101_env_resource_observer observer, void *user_data);
     void p101_env_set_resource_log(struct p101_env *env, FILE *stream);
     void p101_env_track_resource(const struct p101_env *env, p101_env_resource_kind event, const char *resource_class, const char *resource_id, const char *related_id, size_t size, const char *metadata, const char *file_name, const char *function_name,
-                                 int line_number);
+                                 int line_number) P101_ATTR_SEMANTIC_ROLE("p101:instrumentation:resource");
     void p101_env_pointer_resource_id(char *text, size_t text_size, const void *resource);
     void p101_env_track_pointer_resource(const struct p101_env *env, p101_env_resource_kind event, const char *resource_class, const void *resource, const void *related_resource, size_t size, const char *metadata, const char *file_name,
-                                         const char *function_name, int line_number);
+                                         const char *function_name, int line_number) P101_ATTR_SEMANTIC_ROLE("p101:instrumentation:resource");
     void p101_env_track_integer_resource(const struct p101_env *env, p101_env_resource_kind event, const char *resource_class, intmax_t resource, intmax_t related_resource, size_t size, const char *metadata, const char *file_name, const char *function_name,
-                                         int line_number);
+                                         int line_number) P101_ATTR_SEMANTIC_ROLE("p101:instrumentation:resource");
 
 #define P101_TRACE(env) p101_env_trace((env), __FILE__, __func__, __LINE__)
 #define P101_TRACE_EXIT(env) p101_env_trace_exit((env), __FILE__, __func__, __LINE__)

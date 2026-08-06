@@ -116,6 +116,8 @@ static void make_path(char path[], size_t path_size, const char *suffix)
     remove(path);
 }
 
+P101_ATTR_SEMANTIC_ROLE("p101:boundary-case:boundary:wrapper-observation:stale_version")
+
 static void test_event_parser_contract(void)
 {
     struct p101_tool_event_record record;
@@ -153,6 +155,8 @@ static void test_reader_terminates_on_error(void)
     p101_error_destroy(err);
 }
 
+P101_ATTR_SEMANTIC_ROLE("p101:boundary-case:boundary:wrapper-observation:resource_limit")
+
 static void test_long_record_round_trip(void)
 {
     struct p101_error            *err;
@@ -186,6 +190,8 @@ static void test_long_record_round_trip(void)
     fclose(stream);
     p101_error_destroy(err);
 }
+
+P101_ATTR_SEMANTIC_ROLE("p101:boundary-case:boundary:wrapper-observation:clean")
 
 static void test_generic_resource_round_trip(void)
 {
@@ -223,6 +229,8 @@ static void test_generic_resource_round_trip(void)
     fclose(stream);
     p101_error_destroy(err);
 }
+
+P101_ATTR_SEMANTIC_ROLE("p101:boundary-case:boundary:wrapper-observation:typed_refusal")
 
 static void test_event_write_failure_is_sticky(void)
 {
@@ -445,7 +453,7 @@ static void test_uncertain_fault_action_describes_hidden_outcome(void)
     make_path(path, sizeof(path), "uncertain-fault");
     EXPECT(setenv("P101_FAULT_CALL", "1", 1) == 0);
     EXPECT(setenv("P101_FAULT_MODE", "uncertain", 1) == 0);
-    EXPECT(setenv("P101_FAULT_NAME", "write", 1) == 0);
+    EXPECT(setenv("P101_FAULT_NAME", "p101_write", 1) == 0);
     EXPECT(setenv("P101_FAULT_LOG", path, 1) == 0);
     err = p101_error_create(false);
     env = p101_env_create(err, NULL);
@@ -456,7 +464,7 @@ static void test_uncertain_fault_action_describes_hidden_outcome(void)
     EXPECT(err != NULL);
     EXPECT(env != NULL);
 
-    EXPECT(p101_env_check_fault_action(env, "write", &action) != 0);
+    EXPECT(p101_env_check_fault_action(env, "p101_write", &action) != 0);
     EXPECT(action.kind == P101_ENV_FAULT_UNCERTAIN);
     EXPECT(action.phase == P101_ENV_FAULT_AFTER_DISPATCH);
     EXPECT(action.disposition == P101_ENV_FAULT_OUTCOME_UNCERTAIN);
@@ -468,7 +476,7 @@ static void test_uncertain_fault_action_describes_hidden_outcome(void)
         EXPECT(fgetc(stream) == EOF);
         fclose(stream);
     }
-    p101_env_record_fault_action(env, "write", &action);
+    p101_env_record_fault_action(env, "p101_write", &action);
 
     p101_env_destroy(env);
     p101_error_destroy(err);
@@ -617,6 +625,8 @@ static void test_configured_logs_survive_application_observers(void)
     remove(resource_path);
 }
 
+P101_ATTR_SEMANTIC_ROLE("p101:boundary-case:boundary:wrapper-observation:identity_mismatch")
+
 static void test_event_run_identity(void)
 {
     struct p101_error            *err;
@@ -662,6 +672,8 @@ static void test_event_run_identity(void)
     p101_env_destroy(env);
     p101_error_destroy(err);
 }
+
+P101_ATTR_SEMANTIC_ROLE("p101:boundary-case:boundary:wrapper-observation:binding_swap")
 
 static void test_distinct_manual_streams_receive_completion(void)
 {

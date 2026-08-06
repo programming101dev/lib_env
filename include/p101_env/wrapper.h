@@ -21,9 +21,10 @@
 #include <stddef.h>
 
 /*
- * Shared mechanics for authors of p101-style wrappers. The wrapped function
- * name is derived from the required p101_ prefix. Manual-trace fault macros
- * converge on P101_WRAPPER_DONE so the wrapper retains one source-level exit.
+ * Shared mechanics for authors of p101-style wrappers. Fault selection uses
+ * the wrapper's complete C function identity; it never derives a native API
+ * name by slicing the function spelling. Manual-trace fault macros converge
+ * on P101_WRAPPER_DONE so the wrapper retains one source-level exit.
  */
 // clang-format off
 #define P101_WRAPPER_FAULT_RETURN(env, err, result, failure_value)       \
@@ -31,7 +32,7 @@
     {                                                                   \
         int p101_wrapper_fault_code_;                                   \
                                                                         \
-        p101_wrapper_fault_code_ = p101_env_check_fault((env), __func__ + 5); \
+        p101_wrapper_fault_code_ = p101_env_check_fault((env), __func__); \
         if(p101_wrapper_fault_code_ != 0)                               \
         {                                                               \
             P101_ERROR_RAISE_ERRNO((err), p101_wrapper_fault_code_);    \
@@ -45,7 +46,7 @@
     {                                                                   \
         int p101_wrapper_fault_code_;                                   \
                                                                         \
-        p101_wrapper_fault_code_ = p101_env_check_fault((env), __func__ + 5); \
+        p101_wrapper_fault_code_ = p101_env_check_fault((env), __func__); \
         if(p101_wrapper_fault_code_ != 0)                               \
         {                                                               \
             P101_ERROR_RAISE_ERRNO((err), p101_wrapper_fault_code_);    \
@@ -59,7 +60,7 @@
     {                                                                   \
         int p101_wrapper_fault_code_;                                   \
                                                                         \
-        p101_wrapper_fault_code_ = p101_env_check_fault((env), __func__ + 5); \
+        p101_wrapper_fault_code_ = p101_env_check_fault((env), __func__); \
         if(p101_wrapper_fault_code_ != 0)                               \
         {                                                               \
             P101_ERROR_RAISE_SYSTEM((err), "injected wrapper failure",  \
@@ -74,7 +75,7 @@
     {                                                                   \
         int p101_wrapper_fault_code_;                                   \
                                                                         \
-        p101_wrapper_fault_code_ = p101_env_check_fault((env), __func__ + 5); \
+        p101_wrapper_fault_code_ = p101_env_check_fault((env), __func__); \
         if(p101_wrapper_fault_code_ != 0)                               \
         {                                                               \
             P101_ERROR_RAISE_SYSTEM((err), "injected wrapper failure",  \
@@ -89,7 +90,7 @@
     {                                                                   \
         int p101_wrapper_fault_code_;                                   \
                                                                         \
-        p101_wrapper_fault_code_ = p101_env_check_fault((env), __func__ + 5); \
+        p101_wrapper_fault_code_ = p101_env_check_fault((env), __func__); \
         if(p101_wrapper_fault_code_ != 0)                               \
         {                                                               \
             P101_ERROR_RAISE_ERRNO((err), p101_wrapper_fault_code_);    \
@@ -107,7 +108,7 @@
     {                                                                   \
         int p101_wrapper_fault_code_;                                   \
                                                                         \
-        p101_wrapper_fault_code_ = p101_env_check_fault((env), __func__ + 5); \
+        p101_wrapper_fault_code_ = p101_env_check_fault((env), __func__); \
         if(p101_wrapper_fault_code_ != 0)                               \
         {                                                               \
             P101_ERROR_RAISE_ERRNO((err), p101_wrapper_fault_code_);    \
@@ -121,7 +122,7 @@
     {                                                                   \
         int p101_wrapper_fault_code_;                                   \
                                                                         \
-        p101_wrapper_fault_code_ = p101_env_check_fault((env), __func__ + 5); \
+        p101_wrapper_fault_code_ = p101_env_check_fault((env), __func__); \
         if(p101_wrapper_fault_code_ != 0)                               \
         {                                                               \
             P101_ERROR_RAISE_ERRNO((err), p101_wrapper_fault_code_);    \
