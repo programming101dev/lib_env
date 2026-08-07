@@ -2287,7 +2287,14 @@ static long p101_env_exec_scan_limit(void)
         }
         else
         {
-            limit = (long)rl.rlim_cur;
+            /*
+             * rlim_t is a signed long on FreeBSD and an unsigned 64-bit type
+             * elsewhere, so a cast to long is redundant on one platform and
+             * required on the others. The branch above has already proved the
+             * value is no greater than INT_MAX, so convert through int, which
+             * is never the same type as rlim_t on any supported platform.
+             */
+            limit = (int)rl.rlim_cur;
         }
     }
 
