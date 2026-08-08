@@ -27,6 +27,7 @@
  */
 
 #include <p101_error/error.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -52,7 +53,24 @@ extern "C"
 {
 #endif
 
+/*
+ * The environment variables this library reads. Every p101-owned name lives
+ * here so launchers, wrappers, and analyzers spell it exactly once.
+ */
 #define P101_ENV_EVENT_RUN_ID_ENV "P101_EVENT_RUN_ID"
+#define P101_ENV_FAULT_CALL_ENV "P101_FAULT_CALL"
+#define P101_ENV_FAULT_ERRNO_ENV "P101_FAULT_ERRNO"
+#define P101_ENV_FAULT_MODE_ENV "P101_FAULT_MODE"
+#define P101_ENV_FAULT_AMOUNT_ENV "P101_FAULT_AMOUNT"
+#define P101_ENV_FAULT_REPEAT_ENV "P101_FAULT_REPEAT"
+#define P101_ENV_FAULT_NAME_ENV "P101_FAULT_NAME"
+#define P101_ENV_FAULT_LOG_ENV "P101_FAULT_LOG"
+#define P101_ENV_RESOURCE_LOG_ENV "P101_RESOURCE_LOG"
+#define P101_ENV_CALL_LOG_ENV "P101_CALL_LOG"
+#define P101_ENV_CALL_LOG_ENTER_ENV "P101_CALL_LOG_ENTER"
+#define P101_ENV_CALL_LOG_EXIT_ENV "P101_CALL_LOG_EXIT"
+#define P101_ENV_CALL_LOG_ARGS_ENV "P101_CALL_LOG_ARGS"
+#define P101_ENV_CALL_LOG_RESULT_ENV "P101_CALL_LOG_RESULT"
 
     struct p101_env;
 
@@ -200,6 +218,53 @@ extern "C"
         size_t                     amount;
         unsigned long              call_index;
     };
+
+/* The fault-log record prefix and the emitted format version. */
+#define P101_ENV_FAULT_LOG_TAG "P101FAULT"
+#define P101_ENV_FAULT_LOG_VERSION "3"
+
+    /*
+     * The closed vocabulary of P101_FAULT_MODE values. The mode is the
+     * user-facing name; the kind/phase/disposition triple below is what the
+     * mode means, and it is the same triple the fault log reports.
+     */
+    typedef enum
+    {
+        P101_ENV_FAULT_MODE_ERROR = 0,
+        P101_ENV_FAULT_MODE_EINTR,
+        P101_ENV_FAULT_MODE_TIMEOUT,
+        P101_ENV_FAULT_MODE_SHORT,
+        P101_ENV_FAULT_MODE_UNCERTAIN
+    } p101_env_fault_mode;
+
+    /*
+     * The semantics a mode implies. errnum is the errno the mode dictates, or
+     * 0 when the mode keeps whatever P101_ENV_FAULT_ERRNO_ENV supplied. This
+     * struct is the single source of truth for the mode invariant; an analyzer
+     * that reads a fault record can check the record's phase and disposition
+     * against it instead of restating the table.
+     */
+    struct p101_env_fault_defaults
+    {
+        p101_env_fault_kind        kind;
+        p101_env_fault_phase       phase;
+        p101_env_fault_disposition disposition;
+        int                        errnum;
+    };
+
+    /* The wire names. Every one of these returns a static string, never NULL;
+     * an unrecognized value maps to the name of the zero enumerator. */
+    const char *p101_env_fault_mode_name(p101_env_fault_mode mode);
+    const char *p101_env_fault_phase_name(p101_env_fault_phase phase);
+    const char *p101_env_fault_disposition_name(p101_env_fault_disposition disposition);
+
+    /* Parse a mode name. Returns false (leaving *mode untouched) for NULL or
+     * for a name outside the vocabulary. */
+    bool p101_env_fault_mode_from_name(const char *name, p101_env_fault_mode *mode);
+
+    /* Look up the semantics of a mode. Returns false for a mode outside the
+     * vocabulary or a NULL destination. */
+    bool p101_env_fault_mode_defaults(p101_env_fault_mode mode, struct p101_env_fault_defaults *out);
 
     void p101_env_set_fault_injector(struct p101_env *env, p101_env_fault_injector injector, void *user_data);
     int  p101_env_check_fault(const struct p101_env *env, const char *call_name) P101_ATTR_SEMANTIC_ROLE("p101:instrumentation:fault");

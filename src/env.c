@@ -55,9 +55,7 @@ struct p101_env_fault_state
     p101_env_fault_kind        kind;
     p101_env_fault_phase       phase;
     p101_env_fault_disposition disposition;
-    const char                *mode_name;
-    const char                *phase_name;
-    const char                *disposition_name;
+    p101_env_fault_mode        mode;
     size_t                     amount;
     char                      *call_name;
     FILE                      *log_stream;
@@ -563,6 +561,163 @@ p101_single_exit_:
     return;
 }
 
+struct p101_env_fault_mode_entry
+{
+    const char                    *name;
+    p101_env_fault_mode            mode;
+    struct p101_env_fault_defaults defaults;
+};
+
+/*
+ * The single source of truth for the fault-mode vocabulary: the wire name, the
+ * semantic triple the mode implies, and the errno the mode dictates (0 when the
+ * mode keeps the configured errno).
+ */
+static const struct p101_env_fault_mode_entry p101_env_fault_mode_table[] = {
+    {"error",     P101_ENV_FAULT_MODE_ERROR,     {P101_ENV_FAULT_ERROR, P101_ENV_FAULT_BEFORE_CALL, P101_ENV_FAULT_RETRY_SAFE, 0}                      },
+    {"eintr",     P101_ENV_FAULT_MODE_EINTR,     {P101_ENV_FAULT_ERROR, P101_ENV_FAULT_BEFORE_CALL, P101_ENV_FAULT_RETRY_SAFE, EINTR}                  },
+    {"timeout",   P101_ENV_FAULT_MODE_TIMEOUT,   {P101_ENV_FAULT_ERROR, P101_ENV_FAULT_BEFORE_CALL, P101_ENV_FAULT_RETRY_SAFE, ETIMEDOUT}              },
+    {"short",     P101_ENV_FAULT_MODE_SHORT,     {P101_ENV_FAULT_SHORT, P101_ENV_FAULT_AFTER_PARTIAL_PROGRESS, P101_ENV_FAULT_PROGRESS_KNOWN, 0}       },
+    {"uncertain", P101_ENV_FAULT_MODE_UNCERTAIN, {P101_ENV_FAULT_UNCERTAIN, P101_ENV_FAULT_AFTER_DISPATCH, P101_ENV_FAULT_OUTCOME_UNCERTAIN, ETIMEDOUT}},
+};
+
+const char *p101_env_fault_mode_name(p101_env_fault_mode mode)
+{
+    const char *p101_single_result_;
+    size_t      index;
+
+    p101_single_result_ = p101_env_fault_mode_table[0].name;
+
+    for(index = 0U; index < sizeof(p101_env_fault_mode_table) / sizeof(p101_env_fault_mode_table[0]); index++)
+    {
+        if(p101_env_fault_mode_table[index].mode == mode)
+        {
+            p101_single_result_ = p101_env_fault_mode_table[index].name;
+            break;
+        }
+    }
+
+    return p101_single_result_;
+}
+
+bool p101_env_fault_mode_from_name(const char *name, p101_env_fault_mode *mode)
+{
+    bool   p101_single_result_;
+    size_t index;
+
+    p101_single_result_ = false;
+
+    if(name == NULL || mode == NULL)
+    {
+        goto p101_single_exit_;
+    }
+
+    for(index = 0U; index < sizeof(p101_env_fault_mode_table) / sizeof(p101_env_fault_mode_table[0]); index++)
+    {
+        int comparison;
+
+        comparison = strcmp(name, p101_env_fault_mode_table[index].name);
+
+        if(comparison == 0)
+        {
+            *mode               = p101_env_fault_mode_table[index].mode;
+            p101_single_result_ = true;
+            break;
+        }
+    }
+
+p101_single_exit_:
+    return p101_single_result_;
+}
+
+bool p101_env_fault_mode_defaults(p101_env_fault_mode mode, struct p101_env_fault_defaults *out)
+{
+    bool   p101_single_result_;
+    size_t index;
+
+    p101_single_result_ = false;
+
+    if(out == NULL)
+    {
+        goto p101_single_exit_;
+    }
+
+    for(index = 0U; index < sizeof(p101_env_fault_mode_table) / sizeof(p101_env_fault_mode_table[0]); index++)
+    {
+        if(p101_env_fault_mode_table[index].mode == mode)
+        {
+            *out                = p101_env_fault_mode_table[index].defaults;
+            p101_single_result_ = true;
+            break;
+        }
+    }
+
+p101_single_exit_:
+    return p101_single_result_;
+}
+
+const char *p101_env_fault_phase_name(p101_env_fault_phase phase)
+{
+    const char *p101_single_result_;
+
+#ifdef __clang__
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wcovered-switch-default"
+#endif
+    switch(phase)
+    {
+        case P101_ENV_FAULT_BEFORE_CALL:
+            p101_single_result_ = "before-call";
+            goto p101_single_exit_;
+        case P101_ENV_FAULT_AFTER_DISPATCH:
+            p101_single_result_ = "after-dispatch";
+            goto p101_single_exit_;
+        case P101_ENV_FAULT_AFTER_PARTIAL_PROGRESS:
+            p101_single_result_ = "after-partial-progress";
+            goto p101_single_exit_;
+        default:
+            p101_single_result_ = "before-call";
+            goto p101_single_exit_;
+    }
+#ifdef __clang__
+    #pragma clang diagnostic pop
+#endif
+
+p101_single_exit_:
+    return p101_single_result_;
+}
+
+const char *p101_env_fault_disposition_name(p101_env_fault_disposition disposition)
+{
+    const char *p101_single_result_;
+
+#ifdef __clang__
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wcovered-switch-default"
+#endif
+    switch(disposition)
+    {
+        case P101_ENV_FAULT_RETRY_SAFE:
+            p101_single_result_ = "retry-safe";
+            goto p101_single_exit_;
+        case P101_ENV_FAULT_PROGRESS_KNOWN:
+            p101_single_result_ = "progress-known";
+            goto p101_single_exit_;
+        case P101_ENV_FAULT_OUTCOME_UNCERTAIN:
+            p101_single_result_ = "outcome-uncertain";
+            goto p101_single_exit_;
+        default:
+            p101_single_result_ = "retry-safe";
+            goto p101_single_exit_;
+    }
+#ifdef __clang__
+    #pragma clang diagnostic pop
+#endif
+
+p101_single_exit_:
+    return p101_single_result_;
+}
+
 static void p101_env_configure_fault_from_environment(struct p101_env *env, struct p101_error *err)
 {
     const char                  *target_text;
@@ -579,13 +734,8 @@ static void p101_env_configure_fault_from_environment(struct p101_env *env, stru
     unsigned long                amount;
     unsigned long                repeat;
     void                        *state_storage;
-    int                          mode_is_error;
-    int                          mode_is_eintr;
-    int                          mode_is_timeout;
-    int                          mode_is_short;
-    int                          mode_is_uncertain;
 
-    target_text = getenv("P101_FAULT_CALL");
+    target_text = getenv(P101_ENV_FAULT_CALL_ENV);
 
     if(target_text == NULL || target_text[0] == '\0')
     {
@@ -601,7 +751,7 @@ static void p101_env_configure_fault_from_environment(struct p101_env *env, stru
         goto p101_single_exit_;
     }
 
-    errnum_text = getenv("P101_FAULT_ERRNO");
+    errnum_text = getenv(P101_ENV_FAULT_ERRNO_ENV);
     fault_errno = p101_env_parse_int_environment(errnum_text, P101_DEFAULT_FAULT_ERRNO, &ok);
 
     if(!ok || fault_errno <= 0)
@@ -623,75 +773,58 @@ static void p101_env_configure_fault_from_environment(struct p101_env *env, stru
 
     state->target_call = target_call;
     atomic_init(&state->calls_seen, 0UL);
-    state->repeat           = 1UL;
-    state->errnum           = fault_errno;
-    state->kind             = P101_ENV_FAULT_ERROR;
-    state->phase            = P101_ENV_FAULT_BEFORE_CALL;
-    state->disposition      = P101_ENV_FAULT_RETRY_SAFE;
-    state->mode_name        = "error";
-    state->phase_name       = "before-call";
-    state->disposition_name = "retry-safe";
-    state->amount           = 1U;
-    state->call_name        = NULL;
-    state->log_stream       = NULL;
-    state->log_path         = NULL;
-    state->log_owned        = 0;
+    state->repeat      = 1UL;
+    state->errnum      = fault_errno;
+    state->kind        = P101_ENV_FAULT_ERROR;
+    state->phase       = P101_ENV_FAULT_BEFORE_CALL;
+    state->disposition = P101_ENV_FAULT_RETRY_SAFE;
+    state->mode        = P101_ENV_FAULT_MODE_ERROR;
+    state->amount      = 1U;
+    state->call_name   = NULL;
+    state->log_stream  = NULL;
+    state->log_path    = NULL;
+    state->log_owned   = 0;
 
-    mode_text = getenv("P101_FAULT_MODE");
+    mode_text = getenv(P101_ENV_FAULT_MODE_ENV);
     if(mode_text != NULL && mode_text[0] != '\0')
     {
-        mode_is_error     = strcmp(mode_text, "error");
-        mode_is_eintr     = strcmp(mode_text, "eintr");
-        mode_is_timeout   = strcmp(mode_text, "timeout");
-        mode_is_short     = strcmp(mode_text, "short");
-        mode_is_uncertain = strcmp(mode_text, "uncertain");
-        if(mode_is_error == 0)
-        {
-            state->kind = P101_ENV_FAULT_ERROR;
-        }
-        else if(mode_is_eintr == 0)
-        {
-            state->kind      = P101_ENV_FAULT_ERROR;
-            state->errnum    = EINTR;
-            state->mode_name = "eintr";
-        }
-        else if(mode_is_timeout == 0)
-        {
-            state->kind      = P101_ENV_FAULT_ERROR;
-            state->errnum    = ETIMEDOUT;
-            state->mode_name = "timeout";
-        }
-        else if(mode_is_short == 0)
-        {
-            state->kind             = P101_ENV_FAULT_SHORT;
-            state->phase            = P101_ENV_FAULT_AFTER_PARTIAL_PROGRESS;
-            state->disposition      = P101_ENV_FAULT_PROGRESS_KNOWN;
-            state->mode_name        = "short";
-            state->phase_name       = "after-partial-progress";
-            state->disposition_name = "progress-known";
-        }
-        else if(mode_is_uncertain == 0)
-        {
-            state->kind             = P101_ENV_FAULT_UNCERTAIN;
-            state->phase            = P101_ENV_FAULT_AFTER_DISPATCH;
-            state->disposition      = P101_ENV_FAULT_OUTCOME_UNCERTAIN;
-            state->mode_name        = "uncertain";
-            state->phase_name       = "after-dispatch";
-            state->disposition_name = "outcome-uncertain";
-            if(errnum_text == NULL || errnum_text[0] == '\0')
-            {
-                state->errnum = ETIMEDOUT;
-            }
-        }
-        else
+        struct p101_env_fault_defaults defaults;
+        p101_env_fault_mode            mode;
+        bool                           parsed;
+
+        parsed = p101_env_fault_mode_from_name(mode_text, &mode);
+        if(!parsed)
         {
             P101_ERROR_RAISE_ERRNO(err, EINVAL);
             p101_env_fault_state_destroy(state);
             goto p101_single_exit_;
         }
+
+        parsed = p101_env_fault_mode_defaults(mode, &defaults);
+        if(!parsed)
+        {
+            P101_ERROR_RAISE_ERRNO(err, EINVAL);
+            p101_env_fault_state_destroy(state);
+            goto p101_single_exit_;
+        }
+
+        state->mode        = mode;
+        state->kind        = defaults.kind;
+        state->phase       = defaults.phase;
+        state->disposition = defaults.disposition;
+
+        /* An uncertain outcome only supplies a fallback errno; the modes that
+         * name an errno (eintr, timeout) impose it on the configured value. */
+        if(defaults.errnum != 0)
+        {
+            if(mode != P101_ENV_FAULT_MODE_UNCERTAIN || errnum_text == NULL || errnum_text[0] == '\0')
+            {
+                state->errnum = defaults.errnum;
+            }
+        }
     }
 
-    amount_text = getenv("P101_FAULT_AMOUNT");
+    amount_text = getenv(P101_ENV_FAULT_AMOUNT_ENV);
     amount      = p101_env_parse_unsigned_environment(amount_text, 1UL, &ok);
     if(!ok)
     {
@@ -701,7 +834,7 @@ static void p101_env_configure_fault_from_environment(struct p101_env *env, stru
     }
     state->amount = amount;
 
-    repeat_text = getenv("P101_FAULT_REPEAT");
+    repeat_text = getenv(P101_ENV_FAULT_REPEAT_ENV);
     repeat      = p101_env_parse_unsigned_environment(repeat_text, 1UL, &ok);
     if(!ok || repeat == 0UL)
     {
@@ -711,7 +844,7 @@ static void p101_env_configure_fault_from_environment(struct p101_env *env, stru
     }
     state->repeat = repeat;
 
-    target_text = getenv("P101_FAULT_NAME");
+    target_text = getenv(P101_ENV_FAULT_NAME_ENV);
     if(target_text != NULL && target_text[0] != '\0')
     {
         state->call_name = p101_env_copy_text(err, target_text);
@@ -722,7 +855,7 @@ static void p101_env_configure_fault_from_environment(struct p101_env *env, stru
         }
     }
 
-    log_text = getenv("P101_FAULT_LOG");
+    log_text = getenv(P101_ENV_FAULT_LOG_ENV);
 
     if(log_text != NULL && log_text[0] != '\0')
     {
@@ -758,7 +891,7 @@ static void p101_env_configure_fd_log_from_environment(struct p101_env *env, str
 {
     const char *path;
 
-    path = getenv("P101_RESOURCE_LOG");
+    path = getenv(P101_ENV_RESOURCE_LOG_ENV);
 
     if(path == NULL || path[0] == '\0')
     {
@@ -777,7 +910,7 @@ static void p101_env_configure_call_log_from_environment(struct p101_env *env, s
     unsigned    options;
     int         flag_enabled;
 
-    path = getenv("P101_CALL_LOG");
+    path = getenv(P101_ENV_CALL_LOG_ENV);
 
     if(path == NULL || path[0] == '\0')
     {
@@ -786,25 +919,25 @@ static void p101_env_configure_call_log_from_environment(struct p101_env *env, s
 
     options = 0;
 
-    flag_enabled = p101_env_flag_on("P101_CALL_LOG_ENTER", 1);
+    flag_enabled = p101_env_flag_on(P101_ENV_CALL_LOG_ENTER_ENV, 1);
     if(flag_enabled)
     {
         options |= P101_ENV_CALL_LOG_ENTER;
     }
 
-    flag_enabled = p101_env_flag_on("P101_CALL_LOG_EXIT", 1);
+    flag_enabled = p101_env_flag_on(P101_ENV_CALL_LOG_EXIT_ENV, 1);
     if(flag_enabled)
     {
         options |= P101_ENV_CALL_LOG_EXIT;
     }
 
-    flag_enabled = p101_env_flag_on("P101_CALL_LOG_ARGS", 0);
+    flag_enabled = p101_env_flag_on(P101_ENV_CALL_LOG_ARGS_ENV, 0);
     if(flag_enabled)
     {
         options |= P101_ENV_CALL_LOG_ARGUMENTS;
     }
 
-    flag_enabled = p101_env_flag_on("P101_CALL_LOG_RESULT", 0);
+    flag_enabled = p101_env_flag_on(P101_ENV_CALL_LOG_RESULT_ENV, 0);
     if(flag_enabled)
     {
         options |= P101_ENV_CALL_LOG_RESULT;
@@ -1071,19 +1204,17 @@ static struct p101_env_fault_state *p101_env_fault_state_dup(struct p101_error *
 
     state->target_call = source->target_call;
     atomic_init(&state->calls_seen, 0UL);
-    state->repeat           = source->repeat;
-    state->errnum           = source->errnum;
-    state->kind             = source->kind;
-    state->phase            = source->phase;
-    state->disposition      = source->disposition;
-    state->mode_name        = source->mode_name;
-    state->phase_name       = source->phase_name;
-    state->disposition_name = source->disposition_name;
-    state->amount           = source->amount;
-    state->call_name        = NULL;
-    state->log_stream       = NULL;
-    state->log_path         = NULL;
-    state->log_owned        = 0;
+    state->repeat      = source->repeat;
+    state->errnum      = source->errnum;
+    state->kind        = source->kind;
+    state->phase       = source->phase;
+    state->disposition = source->disposition;
+    state->mode        = source->mode;
+    state->amount      = source->amount;
+    state->call_name   = NULL;
+    state->log_stream  = NULL;
+    state->log_path    = NULL;
+    state->log_owned   = 0;
 
     if(source->call_name != NULL)
     {
@@ -1172,15 +1303,15 @@ static void p101_env_log_fault_hit(const struct p101_env *env, const struct p101
     process_id   = getpid();
     errno        = 0;
     write_result = fprintf(state->log_stream,
-                           "P101FAULT\t3\t%" PRIdMAX "\t%lu\t%s\t%d\t%s\t%zu\t%s\t%s\n",
+                           P101_ENV_FAULT_LOG_TAG "\t" P101_ENV_FAULT_LOG_VERSION "\t%" PRIdMAX "\t%lu\t%s\t%d\t%s\t%zu\t%s\t%s\n",
                            (intmax_t)process_id,
                            call_index,
                            (call_name == NULL) ? "?" : call_name,
                            state->errnum,
-                           state->mode_name,
+                           p101_env_fault_mode_name(state->mode),
                            state->amount,
-                           state->phase_name,
-                           state->disposition_name);    // NOLINT(cert-err33-c)
+                           p101_env_fault_phase_name(state->phase),
+                           p101_env_fault_disposition_name(state->disposition));    // NOLINT(cert-err33-c)
     write_error  = errno;
     errno        = 0;
     flush_result = fflush(state->log_stream);
