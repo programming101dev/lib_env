@@ -246,8 +246,8 @@ if p101_workspace_root="$(p101_find_workspace_root)"; then
   done
   p101_local_include_dirs_joined="$(p101_join_paths ${p101_local_include_dirs[@]+"${p101_local_include_dirs[@]}"})"
   p101_local_link_dirs_joined="$(p101_join_paths ${p101_local_link_dirs[@]+"${p101_local_link_dirs[@]}"})"
-  [ -z "$p101_local_include_dirs_joined" ] || p101_public_include_dirs="${p101_public_include_dirs:+$p101_public_include_dirs }$p101_local_include_dirs_joined"
-  [ -z "$p101_local_link_dirs_joined" ] || p101_public_link_dirs="${p101_public_link_dirs:+$p101_public_link_dirs }$p101_local_link_dirs_joined"
+  [ -z "$p101_local_include_dirs_joined" ] || p101_public_include_dirs="$p101_local_include_dirs_joined${p101_public_include_dirs:+ $p101_public_include_dirs}"
+  [ -z "$p101_local_link_dirs_joined" ] || p101_public_link_dirs="$p101_local_link_dirs_joined${p101_public_link_dirs:+ $p101_public_link_dirs}"
 fi
 [ -n "$p101_public_include_dirs" ] && p101_path_args+=("-DP101_PUBLIC_INCLUDE_DIRS=$p101_public_include_dirs")
 [ -n "$p101_public_link_dirs" ] && p101_path_args+=("-DP101_PUBLIC_LINK_DIRS=$p101_public_link_dirs")
