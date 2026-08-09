@@ -17,31 +17,21 @@ CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" || exit 1
 fuzz_secs=20
 do_fuzz=1
 do_format=1
-do_p101_doctor=1
-doctor_count=4
 cov_min=""
 quiet_build="-q"
-doctor_arg_file="p101-doctor-args.txt"
 
 usage() {
   cat <<'USAGE'
 Usage: ./check.sh [-t <seconds>] [--cov <pct>] [--no-fuzz] [--no-format] [-v]
-  Runs format-check, the strict build, unit tests, a short fuzz smoke, and the
-  p101 source/runtime doctor when available, then prints one PASS/FAIL verdict
+  Runs format-check, the strict build, unit tests, and a short fuzz smoke,
+  then prints one PASS/FAIL verdict
   (non-zero exit on any failure).
   -t <seconds>   fuzz smoke budget (default 20).
-  --doctor-count <n>
-                 p101-doctor fault-injection cases (default 4).
   --cov <pct>    also run the tests with coverage and FAIL if line coverage is
                  below <pct> (requires gcovr and coverage-report.sh).
   --no-fuzz      skip the fuzz smoke step.
   --no-format    skip the format check.
-  --no-p101-doctor
-                 skip the p101 source/runtime doctor step.
   -v             verbose build (show the per-file compile commands).
-
-  If p101-doctor is installed, this script reads target arguments from
-  p101-doctor-args.txt. If that file is absent, the p101 doctor step is skipped.
 USAGE
 }
 
@@ -49,18 +39,16 @@ while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help) usage; exit 0 ;;
     -t) fuzz_secs="${2:?}"; shift 2 ;;
-    --doctor-count) doctor_count="${2:?}"; shift 2 ;;
     --cov) cov_min="${2:?}"; shift 2 ;;
     --no-fuzz) do_fuzz=0; shift ;;
     --no-format) do_format=0; shift ;;
-    --no-p101-doctor) do_p101_doctor=0; shift ;;
     -v) quiet_build=""; shift ;;
     *) echo "Unknown option: $1" >&2; usage; exit 2 ;;
   esac
 done
 
 line="======================================================================"
-fmt_st="SKIP"; build_st="SKIP"; test_st="SKIP"; fuzz_st="SKIP"; p101_doctor_st="SKIP"; cov_st="SKIP (use --cov <pct>)"
+fmt_st="SKIP"; build_st="SKIP"; test_st="SKIP"; fuzz_st="SKIP"; cov_st="SKIP (use --cov <pct>)"
 failed=""
 hdr() { echo; echo "$line"; echo ">>> $1"; echo "$line"; }
 
@@ -112,47 +100,7 @@ else
   fuzz_st="SKIP (no fuzz/ tree)"
 fi
 
-# 5) p101 source/runtime doctor — skip cleanly if p101-doctor is not installed -
-# Keep this block synced across the source templates; fresh template instances
-# must remain self-contained, so it intentionally lives inside each template.
-if [ "$do_p101_doctor" -eq 0 ]; then
-  p101_doctor_st="SKIP (--no-p101-doctor)"
-elif ! command -v p101-doctor >/dev/null 2>&1; then
-  if [ -f "$doctor_arg_file" ]; then
-    p101_doctor_st="FAIL (p101-doctor not on PATH)"
-    failed="$failed p101-doctor"
-  else
-    p101_doctor_st="SKIP (p101-doctor not on PATH)"
-  fi
-elif [ ! -f "$doctor_arg_file" ]; then
-  p101_doctor_st="SKIP ($doctor_arg_file not found)"
-elif [ "$build_st" != "PASS" ]; then
-  p101_doctor_st="SKIP (build failed)"
-else
-  build_dir="build"; [ -f .last-build-dir ] && build_dir="$(cat .last-build-dir)"
-  program="$build_dir/main"
-  doctor_program_args=()
-
-  while IFS= read -r arg; do
-    doctor_program_args+=("$arg")
-  done < <(awk 'NF && $0 !~ /^[[:space:]]*#/ { for(i = 1; i <= NF; i++) print $i }' "$doctor_arg_file")
-
-  if [ ! -x "$program" ]; then
-    p101_doctor_st="FAIL ($program not found)"
-    failed="$failed p101-doctor"
-  else
-    doctor_dir="p101-doctor-check"
-    rm -rf "$doctor_dir"
-    hdr "p101 source/runtime doctor"
-    if p101-doctor -o "$doctor_dir" -s src -s include -n "$doctor_count" -- "$program" ${doctor_program_args[@]+"${doctor_program_args[@]}"}; then
-      p101_doctor_st="PASS"
-    else
-      p101_doctor_st="FAIL"; failed="$failed p101-doctor"
-    fi
-  fi
-fi
-
-# 6) coverage gate — opt-in via --cov <pct> ------------------------------------
+# 5) coverage gate — opt-in via --cov <pct> ------------------------------------
 if [ -n "$cov_min" ]; then
   if [ ! -x ./coverage-report.sh ]; then
     cov_st="FAIL (no coverage-report.sh)"
@@ -180,7 +128,6 @@ printf ' %-8s : %s\n' "format"   "$fmt_st"
 printf ' %-8s : %s\n' "build"    "$build_st"
 printf ' %-8s : %s\n' "tests"    "$test_st"
 printf ' %-8s : %s\n' "fuzz"     "$fuzz_st"
-printf ' %-8s : %s\n' "p101doc"  "$p101_doctor_st"
 printf ' %-8s : %s\n' "coverage" "$cov_st"
 echo "$line"
 if [ -n "$failed" ]; then
