@@ -207,6 +207,8 @@ fi
 
 p101_preferred_build_dir="build-$ccbase"
 p101_path_args=()
+p101_public_include_dirs="$(sed -n 's/^P101_PUBLIC_INCLUDE_DIRS:[^=]*=//p' "$main_bd/CMakeCache.txt" | head -1)"
+p101_public_link_dirs="$(sed -n 's/^P101_PUBLIC_LINK_DIRS:[^=]*=//p' "$main_bd/CMakeCache.txt" | head -1)"
 p101_join_paths() {
   local out="" path
   for path in "$@"; do
@@ -244,9 +246,11 @@ if p101_workspace_root="$(p101_find_workspace_root)"; then
   done
   p101_local_include_dirs_joined="$(p101_join_paths ${p101_local_include_dirs[@]+"${p101_local_include_dirs[@]}"})"
   p101_local_link_dirs_joined="$(p101_join_paths ${p101_local_link_dirs[@]+"${p101_local_link_dirs[@]}"})"
-  [ -n "$p101_local_include_dirs_joined" ] && p101_path_args+=("-DP101_PUBLIC_INCLUDE_DIRS=$p101_local_include_dirs_joined")
-  [ -n "$p101_local_link_dirs_joined" ] && p101_path_args+=("-DP101_PUBLIC_LINK_DIRS=$p101_local_link_dirs_joined")
+  [ -z "$p101_local_include_dirs_joined" ] || p101_public_include_dirs="${p101_public_include_dirs:+$p101_public_include_dirs }$p101_local_include_dirs_joined"
+  [ -z "$p101_local_link_dirs_joined" ] || p101_public_link_dirs="${p101_public_link_dirs:+$p101_public_link_dirs }$p101_local_link_dirs_joined"
 fi
+[ -n "$p101_public_include_dirs" ] && p101_path_args+=("-DP101_PUBLIC_INCLUDE_DIRS=$p101_public_include_dirs")
+[ -n "$p101_public_link_dirs" ] && p101_path_args+=("-DP101_PUBLIC_LINK_DIRS=$p101_public_link_dirs")
 
 echo ">> configuring test tree ($test_bd) with $ccbase"
 cmake -S test -B "$test_bd" "$compflag" ${companion_args[@]+"${companion_args[@]}"} \
