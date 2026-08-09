@@ -198,7 +198,7 @@ struct p101_env *p101_env_create(struct p101_error *err, p101_env_tracer tracer)
     void            *storage;
     bool             error_present;
 
-    storage = malloc(sizeof(struct p101_env));    // NOLINT(clang-analyzer-unix.Malloc)
+    storage = malloc(sizeof(*env));    // NOLINT(clang-analyzer-unix.Malloc)
     env     = (struct p101_env *)storage;
 
     if(env == NULL)
@@ -248,7 +248,7 @@ struct p101_env *p101_env_dup(struct p101_error *err, const struct p101_env *env
         goto p101_single_exit_;
     }
 
-    storage = malloc(sizeof(struct p101_env));    // NOLINT(clang-analyzer-unix.Malloc)
+    storage = malloc(sizeof(*new_env));    // NOLINT(clang-analyzer-unix.Malloc)
     new_env = (struct p101_env *)storage;
 
     if(new_env == NULL)
@@ -435,7 +435,7 @@ static void p101_env_init_event_state(struct p101_env *env, struct p101_error *e
     int   run_id_status;
     pid_t process_id;
 
-    storage          = malloc(sizeof(struct p101_env_event_state));
+    storage          = malloc(sizeof(*env->event_state));
     env->event_state = (struct p101_env_event_state *)storage;
 
     if(env->event_state == NULL)
@@ -761,7 +761,7 @@ static void p101_env_configure_fault_from_environment(struct p101_env *env, stru
         goto p101_single_exit_;
     }
 
-    state_storage = malloc(sizeof(struct p101_env_fault_state));
+    state_storage = malloc(sizeof(*state));
     state         = (struct p101_env_fault_state *)state_storage;
 
     if(state == NULL)
@@ -1193,7 +1193,7 @@ static struct p101_env_fault_state *p101_env_fault_state_dup(struct p101_error *
         goto p101_single_exit_;
     }
 
-    storage = malloc(sizeof(struct p101_env_fault_state));
+    storage = malloc(sizeof(*state));
     state   = (struct p101_env_fault_state *)storage;
     if(state == NULL)
     {
@@ -1287,12 +1287,15 @@ p101_single_exit_:
 
 static void p101_env_log_fault_hit(const struct p101_env *env, const struct p101_env_fault_state *state, const char *call_name, unsigned long call_index)
 {
-    int   write_result;
-    int   write_error;
-    int   flush_result;
-    int   flush_error;
-    int   actual_error;
-    pid_t process_id;
+    const char *mode_word;
+    const char *phase_word;
+    const char *disposition_word;
+    int         write_result;
+    int         write_error;
+    int         flush_result;
+    int         flush_error;
+    int         actual_error;
+    pid_t       process_id;
 
     if(state == NULL || state->log_stream == NULL)
     {
@@ -1300,22 +1303,25 @@ static void p101_env_log_fault_hit(const struct p101_env *env, const struct p101
     }
 
     flockfile(state->log_stream);
-    process_id   = getpid();
-    errno        = 0;
-    write_result = fprintf(state->log_stream,
-                           P101_ENV_FAULT_LOG_TAG "\t" P101_ENV_FAULT_LOG_VERSION "\t%" PRIdMAX "\t%lu\t%s\t%d\t%s\t%zu\t%s\t%s\n",
-                           (intmax_t)process_id,
-                           call_index,
-                           (call_name == NULL) ? "?" : call_name,
-                           state->errnum,
-                           p101_env_fault_mode_name(state->mode),
-                           state->amount,
-                           p101_env_fault_phase_name(state->phase),
-                           p101_env_fault_disposition_name(state->disposition));    // NOLINT(cert-err33-c)
-    write_error  = errno;
-    errno        = 0;
-    flush_result = fflush(state->log_stream);
-    flush_error  = errno;
+    process_id       = getpid();
+    mode_word        = p101_env_fault_mode_name(state->mode);
+    phase_word       = p101_env_fault_phase_name(state->phase);
+    disposition_word = p101_env_fault_disposition_name(state->disposition);
+    errno            = 0;
+    write_result     = fprintf(state->log_stream,
+                               P101_ENV_FAULT_LOG_TAG "\t" P101_ENV_FAULT_LOG_VERSION "\t%" PRIdMAX "\t%lu\t%s\t%d\t%s\t%zu\t%s\t%s\n",
+                               (intmax_t)process_id,
+                               call_index,
+                               (call_name == NULL) ? "?" : call_name,
+                               state->errnum,
+                               mode_word,
+                               state->amount,
+                               phase_word,
+                               disposition_word);    // NOLINT(cert-err33-c)
+    write_error      = errno;
+    errno            = 0;
+    flush_result     = fflush(state->log_stream);
+    flush_error      = errno;
     if(write_result < 0 || flush_result == EOF)
     {
         actual_error = write_result < 0 ? write_error : flush_error;
@@ -1855,7 +1861,7 @@ void p101_env_enable_fd_tracking(struct p101_env *env, struct p101_error *err)
         goto p101_single_exit_;
     }
 
-    storage = malloc(sizeof(struct p101_fd_ledger));
+    storage = malloc(sizeof(*ledger));
     ledger  = (struct p101_fd_ledger *)storage;
 
     if(ledger == NULL)
@@ -2820,7 +2826,7 @@ void p101_env_track_open(const struct p101_env *env, int fd, const char *file_na
         goto p101_single_exit_;
     }
 
-    storage = malloc(sizeof(struct p101_fd_record));
+    storage = malloc(sizeof(*rec));
     rec     = (struct p101_fd_record *)storage;
 
     if(rec == NULL)

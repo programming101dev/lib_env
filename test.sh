@@ -242,8 +242,8 @@ if p101_workspace_root="$(p101_find_workspace_root)"; then
       [ -d "$p101_build_dir" ] && p101_local_link_dirs+=("$p101_build_dir")
     done
   done
-  p101_local_include_dirs_joined="$(p101_join_paths "${p101_local_include_dirs[@]}")"
-  p101_local_link_dirs_joined="$(p101_join_paths "${p101_local_link_dirs[@]}")"
+  p101_local_include_dirs_joined="$(p101_join_paths ${p101_local_include_dirs[@]+"${p101_local_include_dirs[@]}"})"
+  p101_local_link_dirs_joined="$(p101_join_paths ${p101_local_link_dirs[@]+"${p101_local_link_dirs[@]}"})"
   [ -n "$p101_local_include_dirs_joined" ] && p101_path_args+=("-DP101_PUBLIC_INCLUDE_DIRS=$p101_local_include_dirs_joined")
   [ -n "$p101_local_link_dirs_joined" ] && p101_path_args+=("-DP101_PUBLIC_LINK_DIRS=$p101_local_link_dirs_joined")
 fi
