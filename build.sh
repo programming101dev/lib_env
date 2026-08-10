@@ -22,7 +22,8 @@ target=""
 build_dir=""
 
 usage() {
-  echo "Usage: $0 [-j N] [-t <target>] [-q]"
+  echo "Usage: $0 [-b <build-dir>] [-j N] [-t <target>] [-q]"
+  echo "  -b dir      Build this configured directory instead of .last-build-dir"
   echo "  -j N        Parallel build with N jobs (or set JOBS / CMAKE_BUILD_PARALLEL_LEVEL)"
   echo "  -t target   Build a specific target (e.g. -t main)"
   echo "  -f, --format Apply clang-tidy --fix (full check set) + clang-format, then exit"
@@ -74,8 +75,9 @@ case " $* " in
 esac
 
 # ----------------- parse options -----------------
-while getopts ":j:t:h" opt; do
+while getopts ":b:j:t:h" opt; do
   case "$opt" in
+    b) build_dir="$OPTARG" ;;
     j) jobs="$OPTARG" ;;
     t) target="$OPTARG" ;;
     h|*) usage ;;
@@ -84,7 +86,9 @@ done
 
 # ----------------- determine build dir -----------------
 # Preferred: read the last configured build dir written by change-compiler.sh
-if [[ -f ".last-build-dir" ]]; then
+if [[ -n "$build_dir" ]]; then
+  :
+elif [[ -f ".last-build-dir" ]]; then
   build_dir="$(< .last-build-dir)"
 else
   # Fallback for legacy/manual setups
