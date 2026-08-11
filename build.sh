@@ -20,15 +20,20 @@ unset _p101_bq _p101_bqa
 jobs="${JOBS:-${CMAKE_BUILD_PARALLEL_LEVEL:-}}"
 target=""
 build_dir=""
+clean_first=1
+case "${P101_INCREMENTAL_BUILD:-0}" in
+  1|true|TRUE|yes|YES|on|ON) clean_first=0 ;;
+esac
 
 usage() {
-  echo "Usage: $0 [-b <build-dir>] [-j N] [-t <target>] [-q]"
+  echo "Usage: $0 [-b <build-dir>] [-j N] [-t <target>] [-q] [--incremental]"
   echo "  -b dir      Build this configured directory instead of .last-build-dir"
   echo "  -j N        Parallel build with N jobs (or set JOBS / CMAKE_BUILD_PARALLEL_LEVEL)"
   echo "  -t target   Build a specific target (e.g. -t main)"
   echo "  -f, --format Apply clang-tidy --fix (full check set) + clang-format, then exit"
   echo "  -C, --format-check  Check formatting only (clang-format --dry-run); non-zero if unclean"
   echo "  -q          Quiet: hide the per-file compile-command dump"
+  echo "  --incremental Preserve current CMake outputs and rebuild only invalidated work"
   exit 1
 }
 
@@ -75,6 +80,20 @@ case " $* " in
 esac
 
 # ----------------- parse options -----------------
+_p101_build_args=()
+for _p101_build_arg in "$@"; do
+  case "$_p101_build_arg" in
+    --incremental) clean_first=0 ;;
+    *) _p101_build_args+=("$_p101_build_arg") ;;
+  esac
+done
+if ((${#_p101_build_args[@]})); then
+  set -- "${_p101_build_args[@]}"
+else
+  set --
+fi
+unset _p101_build_arg _p101_build_args
+
 while getopts ":b:j:t:h" opt; do
   case "$opt" in
     b) build_dir="$OPTARG" ;;
@@ -103,7 +122,9 @@ if [[ ! -d "$build_dir" || ! -f "$build_dir/CMakeCache.txt" ]]; then
 fi
 
 # ----------------- assemble build command -----------------
-cmd=(cmake --build "$build_dir" --clean-first ${_P101_VERBOSE:+--verbose})
+cmd=(cmake --build "$build_dir")
+[[ "$clean_first" -eq 0 ]] || cmd+=(--clean-first)
+[[ -z "$_P101_VERBOSE" ]] || cmd+=(--verbose)
 [[ -n "$target" ]] && cmd+=(--target "$target")
 [[ -n "$jobs" ]] && cmd+=(--parallel "$jobs")
 
