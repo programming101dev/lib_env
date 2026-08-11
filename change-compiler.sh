@@ -128,8 +128,33 @@ case "$build_dir" in
     exit 2 ;;
 esac
 if [[ -L "$build_dir" ]]; then
-  echo "Error: refusing to use symlink as build directory: $build_dir" >&2
-  exit 2
+  cache_root="${P101_REPOSITORY_BUILD_CACHE:-}"
+  case "$cache_root" in
+    /*) ;;
+    *)
+      echo "Error: refusing to use symlink as build directory: $build_dir" >&2
+      exit 2
+      ;;
+  esac
+  cache_root="$(CDPATH='' cd -P -- "$cache_root" 2>/dev/null && pwd -P)" || {
+    echo "Error: repository build cache is unavailable: $cache_root" >&2
+    exit 2
+  }
+  build_target="$(CDPATH='' cd -P -- "$build_dir" 2>/dev/null && pwd -P)" || {
+    echo "Error: build-directory symlink target is unavailable: $build_dir" >&2
+    exit 2
+  }
+  case "$build_target" in
+    "$cache_root"/*) ;;
+    *)
+      echo "Error: build-directory symlink points outside the admitted cache: $build_dir -> $build_target" >&2
+      exit 2
+      ;;
+  esac
+  if ! $reuse_build; then
+    echo "Error: an admitted cached build-directory symlink requires -R: $build_dir" >&2
+    exit 2
+  fi
 fi
 
 # ----------------- sanitizers -----------------
