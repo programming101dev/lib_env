@@ -101,9 +101,13 @@ fi
 if [ "$lang" = "CXX" ] || [ "$lang" = "CPP" ]; then
   comp="$(sed -n 's/^CMAKE_CXX_COMPILER:[^=]*=//p' "$main_bd/CMakeCache.txt" | head -1)"
   compflag="-DCMAKE_CXX_COMPILER=$comp"
+  compiler_arg1="$(sed -n 's/^CMAKE_CXX_COMPILER_ARG1:[^=]*=//p' "$main_bd/CMakeCache.txt" | head -1)"
+  compiler_arg1_name="CMAKE_CXX_COMPILER_ARG1"
 else
   comp="$(sed -n 's/^CMAKE_C_COMPILER:[^=]*=//p' "$main_bd/CMakeCache.txt" | head -1)"
   compflag="-DCMAKE_C_COMPILER=$comp"
+  compiler_arg1="$(sed -n 's/^CMAKE_C_COMPILER_ARG1:[^=]*=//p' "$main_bd/CMakeCache.txt" | head -1)"
+  compiler_arg1_name="CMAKE_C_COMPILER_ARG1"
 fi
 [ -n "$comp" ] || { echo "Could not read the compiler from $main_bd/CMakeCache.txt." >&2; exit 1; }
 ccbase="$(basename "$comp")"
@@ -148,6 +152,17 @@ if companion_comp="$(p101_companion_compiler "$comp")"; then
     fi
   elif printf '%s\n' "$test_project_line" | grep -Eq '(^|[[:space:](])CXX([[:space:])]|$)'; then
     companion_args+=("-DCMAKE_CXX_COMPILER=$companion_comp")
+  fi
+fi
+compiler_driver_args=()
+if [ -n "$compiler_arg1" ]; then
+  compiler_driver_args+=("-D${compiler_arg1_name}=$compiler_arg1")
+  if [ "${#companion_args[@]}" -ne 0 ]; then
+    if [ "$compiler_arg1_name" = "CMAKE_C_COMPILER_ARG1" ]; then
+      compiler_driver_args+=("-DCMAKE_CXX_COMPILER_ARG1=$compiler_arg1")
+    else
+      compiler_driver_args+=("-DCMAKE_C_COMPILER_ARG1=$compiler_arg1")
+    fi
   fi
 fi
 
@@ -265,6 +280,7 @@ fi
 
 echo ">> configuring test tree ($test_bd) with $ccbase"
 cmake -S test -B "$test_bd" "$compflag" ${companion_args[@]+"${companion_args[@]}"} \
+  ${compiler_driver_args[@]+"${compiler_driver_args[@]}"} \
   -DCMAKE_POSITION_INDEPENDENT_CODE=ON "$compile_flag_arg" \
   ${sanitizer_args[@]+"${sanitizer_args[@]}"} \
   ${p101_path_args[@]+"${p101_path_args[@]}"} "$cov_arg" >/dev/null
