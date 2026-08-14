@@ -235,6 +235,41 @@ if [ -f "$test_bd/CMakeCache.txt" ] && [ "${#companion_args[@]}" -ne 0 ]; then
     rm -rf "$test_bd"
   fi
 fi
+
+p101_cached_tool_is_available() {
+  local cache_key="$1"
+  local cached_tool
+
+  cached_tool="$(sed -n "s/^${cache_key}:[^=]*=//p" "$test_bd/CMakeCache.txt" | head -1)"
+  case "$cached_tool" in
+    ""|*-NOTFOUND) return 0 ;;
+    /*) [ -x "$cached_tool" ] ;;
+    *) command -v "$cached_tool" >/dev/null 2>&1 ;;
+  esac
+}
+
+p101_test_cache_tools_are_available() {
+  local cache_key
+
+  for cache_key in \
+    CMAKE_AR CMAKE_RANLIB CMAKE_LINKER \
+    CMAKE_C_COMPILER_AR CMAKE_C_COMPILER_RANLIB \
+    CMAKE_CXX_COMPILER_AR CMAKE_CXX_COMPILER_RANLIB; do
+    if ! p101_cached_tool_is_available "$cache_key"; then
+      printf '%s' "$cache_key"
+      return 1
+    fi
+  done
+  return 0
+}
+
+if [ -f "$test_bd/CMakeCache.txt" ]; then
+  unavailable_cache_tool=""
+  unavailable_cache_tool="$(p101_test_cache_tools_are_available)" || {
+    echo ">> removing test cache with unavailable tool: $unavailable_cache_tool"
+    rm -rf "$test_bd"
+  }
+fi
 cov_arg="-DP101_TEST_COVERAGE=OFF"
 [ "$coverage" -eq 1 ] && cov_arg="-DP101_TEST_COVERAGE=ON"
 sanitizer_flags=""
