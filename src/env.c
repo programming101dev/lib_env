@@ -19,7 +19,7 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <limits.h>
-#include <p101_tool_event/event.h>
+#include <p101_record/event.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdio.h>
