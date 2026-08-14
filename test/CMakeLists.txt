@@ -14,14 +14,15 @@ endif()
 
 add_library(p101_env_under_test STATIC
         "${CMAKE_CURRENT_SOURCE_DIR}/../src/env.c"
-        "${CMAKE_CURRENT_SOURCE_DIR}/../../lib_tool_event/src/record.c"
-        "${CMAKE_CURRENT_SOURCE_DIR}/../../lib_tool_event/src/event_write.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../lib_record/src/record.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../lib_record/src/event_write.c"
         "${CMAKE_CURRENT_SOURCE_DIR}/../../lib_tool_event/src/event.c"
         "${CMAKE_CURRENT_SOURCE_DIR}/../../lib_error/src/check.c"
         "${CMAKE_CURRENT_SOURCE_DIR}/../../lib_error/src/error.c"
 )
 target_include_directories(p101_env_under_test PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/../include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../lib_record/include"
         "${CMAKE_CURRENT_SOURCE_DIR}/../../lib_tool_event/include"
         "${CMAKE_CURRENT_SOURCE_DIR}/../../lib_error/include"
 )

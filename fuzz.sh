@@ -140,14 +140,8 @@ if p101_workspace_root="$(p101_find_workspace_root)"; then
     # Prefer libraries built by the same compiler. On macOS, mixing an
     # Apple-Clang ASan dylib with a Homebrew-Clang fuzzer loads two incompatible
     # sanitizer runtimes.
-    [ -d "$lib/$p101_preferred_build_dir" ] && p101_local_link_dirs+=("$lib/$p101_preferred_build_dir")
-    if [ -f "$lib/.last-build-dir" ]; then
-      p101_last_build_dir="$(cat "$lib/.last-build-dir")"
-      [ -d "$lib/$p101_last_build_dir" ] && p101_local_link_dirs+=("$lib/$p101_last_build_dir")
-    fi
-    for p101_build_dir in "$lib"/build*; do
-      [ -d "$p101_build_dir" ] && p101_local_link_dirs+=("$p101_build_dir")
-    done
+    p101_dependency_dir="$lib/$p101_preferred_build_dir"
+    [ -d "$p101_dependency_dir" ] && p101_local_link_dirs+=("$p101_dependency_dir")
   done
   p101_local_include_dirs_joined="$(p101_join_paths ${p101_local_include_dirs[@]+"${p101_local_include_dirs[@]}"})"
   p101_local_link_dirs_joined="$(p101_join_paths ${p101_local_link_dirs[@]+"${p101_local_link_dirs[@]}"})"
