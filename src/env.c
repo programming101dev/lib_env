@@ -2567,6 +2567,9 @@ static p101_tool_event_resource_kind p101_env_event_resource_kind(p101_env_resou
         case P101_ENV_RESOURCE_TRANSFER:
             p101_single_result_ = P101_TOOL_EVENT_RESOURCE_TRANSFER;
             goto p101_single_exit_;
+        case P101_ENV_RESOURCE_USE:
+            p101_single_result_ = P101_TOOL_EVENT_RESOURCE_USE;
+            goto p101_single_exit_;
         default:
             p101_single_result_ = P101_TOOL_EVENT_RESOURCE_ACQUIRE;
             goto p101_single_exit_;

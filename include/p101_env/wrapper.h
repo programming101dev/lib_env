@@ -18,6 +18,7 @@
  */
 
 #include <p101_env/env.h>
+#include <p101_env/resource_classes.h>
 #include <stddef.h>
 
 /*
@@ -27,6 +28,12 @@
  * on P101_WRAPPER_DONE so the wrapper retains one source-level exit.
  */
 // clang-format off
+#define P101_WRAPPER_BLOCKING(env)                                      \
+    p101_env_track_resource((env), P101_ENV_RESOURCE_USE,               \
+                            P101_RESOURCE_CLASS_BLOCKING_OPERATION,      \
+                            __func__, NULL, 0U, NULL, __FILE__,          \
+                            __func__, __LINE__)
+
 #define P101_WRAPPER_FAULT_RETURN(env, err, result, failure_value)       \
     do                                                                  \
     {                                                                   \

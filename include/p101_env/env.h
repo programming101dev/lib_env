@@ -393,7 +393,8 @@ extern "C"
         P101_ENV_RESOURCE_ACQUIRE = 0,
         P101_ENV_RESOURCE_RELEASE,
         P101_ENV_RESOURCE_REPLACE,
-        P101_ENV_RESOURCE_TRANSFER
+        P101_ENV_RESOURCE_TRANSFER,
+        P101_ENV_RESOURCE_USE
     } p101_env_resource_kind;
 
     typedef void (*p101_env_resource_observer)(const struct p101_env *env, p101_env_resource_kind event, const char *resource_class, const char *resource_id, const char *related_id, size_t size, const char *metadata, const char *file_name,
@@ -433,6 +434,7 @@ extern "C"
 #define P101_TRACK_RESOURCE_RELEASE(env, resource_class, resource_id, metadata) p101_env_track_resource((env), P101_ENV_RESOURCE_RELEASE, (resource_class), (resource_id), NULL, 0U, (metadata), __FILE__, __func__, __LINE__)
 #define P101_TRACK_RESOURCE_REPLACE(env, resource_class, resource_id, related_id, size, metadata) p101_env_track_resource((env), P101_ENV_RESOURCE_REPLACE, (resource_class), (resource_id), (related_id), (size), (metadata), __FILE__, __func__, __LINE__)
 #define P101_TRACK_RESOURCE_TRANSFER(env, resource_class, resource_id, related_id, metadata) p101_env_track_resource((env), P101_ENV_RESOURCE_TRANSFER, (resource_class), (resource_id), (related_id), 0U, (metadata), __FILE__, __func__, __LINE__)
+#define P101_TRACK_RESOURCE_USE(env, resource_class, resource_id, metadata) p101_env_track_resource((env), P101_ENV_RESOURCE_USE, (resource_class), (resource_id), NULL, 0U, (metadata), __FILE__, __func__, __LINE__)
 #define P101_ENV_POINTER_RESOURCE_ID_SIZE (2U + (sizeof(uintptr_t) * 2U) + 1U)
 #define P101_TRACK_POINTER_RESOURCE_ACQUIRE(env, resource_class, resource, size, metadata) p101_env_track_pointer_resource((env), P101_ENV_RESOURCE_ACQUIRE, (resource_class), (resource), NULL, (size), (metadata), __FILE__, __func__, __LINE__)
 #define P101_TRACK_POINTER_RESOURCE_RELEASE(env, resource_class, resource, metadata) p101_env_track_pointer_resource((env), P101_ENV_RESOURCE_RELEASE, (resource_class), (resource), NULL, 0U, (metadata), __FILE__, __func__, __LINE__)
@@ -440,12 +442,14 @@ extern "C"
     p101_env_track_pointer_resource((env), P101_ENV_RESOURCE_REPLACE, (resource_class), (resource), (related_resource), (size), (metadata), __FILE__, __func__, __LINE__)
 #define P101_TRACK_POINTER_RESOURCE_TRANSFER(env, resource_class, resource, related_resource, metadata)                                                                                                                                                            \
     p101_env_track_pointer_resource((env), P101_ENV_RESOURCE_TRANSFER, (resource_class), (resource), (related_resource), 0U, (metadata), __FILE__, __func__, __LINE__)
+#define P101_TRACK_POINTER_RESOURCE_USE(env, resource_class, resource, metadata) p101_env_track_pointer_resource((env), P101_ENV_RESOURCE_USE, (resource_class), (resource), NULL, 0U, (metadata), __FILE__, __func__, __LINE__)
 #define P101_TRACK_INTEGER_RESOURCE_ACQUIRE(env, resource_class, resource, size, metadata) p101_env_track_integer_resource((env), P101_ENV_RESOURCE_ACQUIRE, (resource_class), (intmax_t)(resource), 0, (size), (metadata), __FILE__, __func__, __LINE__)
 #define P101_TRACK_INTEGER_RESOURCE_RELEASE(env, resource_class, resource, metadata) p101_env_track_integer_resource((env), P101_ENV_RESOURCE_RELEASE, (resource_class), (intmax_t)(resource), 0, 0U, (metadata), __FILE__, __func__, __LINE__)
 #define P101_TRACK_INTEGER_RESOURCE_REPLACE(env, resource_class, resource, related_resource, size, metadata)                                                                                                                                                       \
     p101_env_track_integer_resource((env), P101_ENV_RESOURCE_REPLACE, (resource_class), (intmax_t)(resource), (intmax_t)(related_resource), (size), (metadata), __FILE__, __func__, __LINE__)
 #define P101_TRACK_INTEGER_RESOURCE_TRANSFER(env, resource_class, resource, related_resource, metadata)                                                                                                                                                            \
     p101_env_track_integer_resource((env), P101_ENV_RESOURCE_TRANSFER, (resource_class), (intmax_t)(resource), (intmax_t)(related_resource), 0U, (metadata), __FILE__, __func__, __LINE__)
+#define P101_TRACK_INTEGER_RESOURCE_USE(env, resource_class, resource, metadata) p101_env_track_integer_resource((env), P101_ENV_RESOURCE_USE, (resource_class), (intmax_t)(resource), 0, 0U, (metadata), __FILE__, __func__, __LINE__)
 
 #ifdef __cplusplus
 }
